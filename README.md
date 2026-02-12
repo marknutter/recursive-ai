@@ -1,8 +1,10 @@
 # RLM: Recursive Language Model for Claude Code
 
-RLM lets Claude Code analyze content far beyond its context window. Instead of feeding entire codebases into the prompt, Claude treats content as external data -- scanning metadata, choosing a chunking strategy, extracting targeted slices, and delegating analysis to parallel subagents. The orchestrator never sees raw content; it only sees bounded summaries and subagent findings.
+> **Paper:** [Scaling LLM Inference with Optimized Sample Compute Allocation](https://arxiv.org/html/2512.24601v2)
 
-Based on the [RLM paper](https://arxiv.org/html/2512.24601v2), which discovered that LLMs can process content 100x beyond their context limits by treating prompts as external REPL variables.
+The RLM paper's key finding is deceptively simple: LLMs don't need to *see* content to reason about it. By giving an LLM access to a REPL, it can write code to programmatically scan, chunk, and inspect content that would never fit in its context window -- then call sub-LLMs on individual pieces and synthesize the results. The researchers showed this lets models process inputs 100x beyond their context limits with no architectural changes, no fine-tuning, and no RAG pipeline. The LLM just needs tools and the idea that it can use them recursively.
+
+This project adapts that technique for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Claude Code already has Bash (our REPL) and Task subagents (our sub-LLM calls), so the entire RLM loop runs natively on an existing subscription with zero API keys. A Python toolkit handles scanning, chunking, and extraction while Claude orchestrates the recursive analysis -- never loading raw content into its own context, only metadata and subagent findings.
 
 ## How It Works
 
