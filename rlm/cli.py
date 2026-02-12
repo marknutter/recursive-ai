@@ -1,0 +1,249 @@
+"""CLI entry point -- all Claude<->Python interaction goes through here.
+
+All stdout is capped at 4000 chars with truncation notice.
+"""
+
+import argparse
+import json
+import sys
+
+from rlm import scanner, chunker, extractor, state
+
+MAX_OUTPUT = 4000
+
+
+def _truncate(text: str, max_chars: int = MAX_OUTPUT) -> str:
+    """Truncate output with notice if over budget."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars - 60] + "\n\n... [output truncated at 4000 chars -- use extract for full content]"
+
+
+def _print(text: str):
+    """Print with truncation."""
+    print(_truncate(text))
+
+
+def cmd_scan(args):
+    """Scan a path and produce metadata summary."""
+    metadata = scanner.scan_path(args.path, max_depth=args.depth)
+    _print(scanner.format_metadata(metadata, max_chars=MAX_OUTPUT))
+
+
+def cmd_chunk(args):
+    """Chunk content and save manifest."""
+    strategy = args.strategy
+    path = args.path
+
+    if strategy == "lines":
+        manifest = chunker.chunk_by_lines(path, chunk_size=args.chunk_size, overlap=args.overlap)
+    elif strategy.startswith("files"):
+        group_by = strategy.replace("files_", "") if "_" in strategy else "directory"
+        manifest = chunker.chunk_by_files(path, group_by=group_by)
+    elif strategy == "functions":
+        manifest = chunker.chunk_by_functions(path)
+    elif strategy == "headings":
+        manifest = chunker.chunk_by_headings(path, level=args.heading_level)
+    elif strategy == "semantic":
+        manifest = chunker.chunk_by_semantic(path, target_size=args.target_size)
+    else:
+        _print(f"Unknown strategy: {strategy}")
+        sys.exit(1)
+
+    if "error" in manifest:
+        _print(f"Error: {manifest['error']}")
+        sys.exit(1)
+
+    # Save manifest if session provided
+    if args.session:
+        session_dir = f"/tmp/rlm-sessions/{args.session}"
+        manifest_path = chunker.save_manifest(manifest, session_dir)
+        state.update_iteration(
+            args.session,
+            iteration=0,
+            action=f"chunk_{strategy}",
+            summary=f"Created {manifest['chunk_count']} chunks"
+        )
+        manifest["manifest_path"] = manifest_path
+
+    # Output summary (not full manifest)
+    lines = []
+    lines.append(f"Strategy: {manifest.get('strategy', strategy)}")
+    lines.append(f"Chunks: {manifest['chunk_count']}")
+    if "total_lines" in manifest:
+        lines.append(f"Total lines: {manifest['total_lines']}")
+    lines.append("")
+
+    for c in manifest["chunks"]:
+        cid = c["chunk_id"]
+        chars = c.get("char_count", 0)
+        preview = c.get("preview", "")
+        name = c.get("name", c.get("heading", c.get("group_name", "")))
+
+        info = f"  {cid}"
+        if name:
+            info += f" [{name}]"
+        if "start_line" in c:
+            info += f" L{c['start_line']}-{c['end_line']}"
+        info += f" ({chars:,} chars)"
+        if preview:
+            info += f"  {preview[:60]}"
+        lines.append(info)
+
+    if args.session:
+        lines.append(f"\nManifest saved: {manifest['manifest_path']}")
+
+    _print("\n".join(lines))
+
+
+def cmd_extract(args):
+    """Extract content from a file or manifest."""
+    if args.lines:
+        parts = args.lines.split(":")
+        if len(parts) != 2:
+            _print("Error: --lines format is START:END (e.g., 1:50)")
+            sys.exit(1)
+        start, end = int(parts[0]), int(parts[1])
+        content = extractor.extract_lines(args.path, start, end)
+        _print(content)
+    elif args.chunk_id and args.manifest:
+        content = extractor.extract_chunk(args.manifest, args.chunk_id)
+        _print(content)
+    elif args.grep:
+        content = extractor.extract_grep(args.path, args.grep, context=args.context)
+        _print(content)
+    else:
+        _print("Error: Specify --lines START:END, --chunk-id ID --manifest PATH, or --grep PATTERN")
+        sys.exit(1)
+
+
+def cmd_recommend(args):
+    """Suggest chunking strategies for a path."""
+    recommendations = chunker.recommend_strategies(args.path)
+    lines = [f"Recommended strategies for: {args.path}\n"]
+    for r in recommendations:
+        lines.append(f"  [{r['priority']}] {r['strategy']}: {r['reason']}")
+    _print("\n".join(lines))
+
+
+def cmd_init(args):
+    """Create a new RLM session."""
+    result = state.init_session(args.query, args.path)
+    lines = [
+        f"Session created: {result['session_id']}",
+        f"Session dir: {result['session_dir']}",
+        f"Query: {args.query}",
+        f"Target: {args.path}",
+    ]
+    _print("\n".join(lines))
+
+
+def cmd_status(args):
+    """Show session status."""
+    _print(state.format_status(args.session_id))
+
+
+def cmd_result(args):
+    """Manage session results."""
+    if args.all:
+        summary = state.format_results_summary(args.session_id)
+        _print(summary)
+    elif args.key and args.value:
+        result = state.add_result(args.session_id, args.key, args.value)
+        if "error" in result:
+            _print(f"Error: {result['error']}")
+        else:
+            _print(f"Result stored: {args.key}")
+    elif args.key:
+        results = state.get_results(args.session_id)
+        if isinstance(results, dict) and args.key in results:
+            _print(results[args.key]["value"])
+        else:
+            _print(f"Result '{args.key}' not found")
+    else:
+        _print("Error: Specify --key K --value V to store, --key K to retrieve, or --all for summary")
+        sys.exit(1)
+
+
+def cmd_finalize(args):
+    """Mark session as complete."""
+    result = state.set_final(args.session_id, args.answer or "")
+    if "error" in result:
+        _print(f"Error: {result['error']}")
+    else:
+        _print(f"Session {args.session_id} marked as complete")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="rlm",
+        description="RLM: Recursive Language Model toolkit for Claude Code",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # scan
+    p_scan = subparsers.add_parser("scan", help="Scan path and produce metadata")
+    p_scan.add_argument("path", help="File or directory to scan")
+    p_scan.add_argument("--depth", type=int, default=3, help="Max directory depth")
+    p_scan.set_defaults(func=cmd_scan)
+
+    # chunk
+    p_chunk = subparsers.add_parser("chunk", help="Chunk content and save manifest")
+    p_chunk.add_argument("path", help="File or directory to chunk")
+    p_chunk.add_argument("--strategy", required=True,
+                         choices=["lines", "files_directory", "files_language", "files_balanced",
+                                  "functions", "headings", "semantic"],
+                         help="Chunking strategy")
+    p_chunk.add_argument("--session", help="Session ID to associate manifest with")
+    p_chunk.add_argument("--chunk-size", type=int, default=500, help="Lines per chunk (lines strategy)")
+    p_chunk.add_argument("--overlap", type=int, default=50, help="Overlap lines (lines strategy)")
+    p_chunk.add_argument("--heading-level", type=int, default=2, help="Heading level (headings strategy)")
+    p_chunk.add_argument("--target-size", type=int, default=50000, help="Target chars (semantic strategy)")
+    p_chunk.set_defaults(func=cmd_chunk)
+
+    # extract
+    p_extract = subparsers.add_parser("extract", help="Extract content")
+    p_extract.add_argument("path", help="File path")
+    p_extract.add_argument("--lines", help="Line range START:END")
+    p_extract.add_argument("--chunk-id", help="Chunk ID to extract")
+    p_extract.add_argument("--manifest", help="Manifest file path")
+    p_extract.add_argument("--grep", help="Regex pattern to search")
+    p_extract.add_argument("--context", type=int, default=5, help="Context lines for grep")
+    p_extract.set_defaults(func=cmd_extract)
+
+    # recommend
+    p_recommend = subparsers.add_parser("recommend", help="Suggest chunking strategies")
+    p_recommend.add_argument("path", help="File or directory")
+    p_recommend.set_defaults(func=cmd_recommend)
+
+    # init
+    p_init = subparsers.add_parser("init", help="Create new RLM session")
+    p_init.add_argument("query", help="The analysis query")
+    p_init.add_argument("path", help="Target path")
+    p_init.set_defaults(func=cmd_init)
+
+    # status
+    p_status = subparsers.add_parser("status", help="Show session status")
+    p_status.add_argument("session_id", help="Session ID")
+    p_status.set_defaults(func=cmd_status)
+
+    # result
+    p_result = subparsers.add_parser("result", help="Manage session results")
+    p_result.add_argument("session_id", help="Session ID")
+    p_result.add_argument("--key", help="Result key")
+    p_result.add_argument("--value", help="Result value to store")
+    p_result.add_argument("--all", action="store_true", help="Show all results summary")
+    p_result.set_defaults(func=cmd_result)
+
+    # finalize
+    p_finalize = subparsers.add_parser("finalize", help="Mark session complete")
+    p_finalize.add_argument("session_id", help="Session ID")
+    p_finalize.add_argument("--answer", help="Final answer text")
+    p_finalize.set_defaults(func=cmd_finalize)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

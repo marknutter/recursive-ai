@@ -1,0 +1,16 @@
+[project]
+name = "rlm"
+version = "0.1.0"
+description = "Recursive Language Model - process content beyond context windows using recursive sub-LLM delegation"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+rlm = "rlm.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
