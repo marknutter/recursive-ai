@@ -37,12 +37,20 @@ uv run rlm extract <filepath> --lines <START>:<END>
 uv run rlm extract <filepath> --chunk-id <ID> --manifest <manifest_path>
 uv run rlm extract <filepath> --grep "<pattern>" --context 5
 
+# Analyze -- dispatch chunk to LLM provider API (alternative to Task subagents)
+uv run rlm analyze <session_id> --file <filepath> --lines <START>:<END>
+uv run rlm analyze <session_id> --chunk-id <ID> --manifest <manifest_path>
+uv run rlm analyze <session_id> --provider openai   # override provider
+
 # Session management
 uv run rlm init "<query>" "<path>"
 uv run rlm status <session_id>
 uv run rlm result <session_id> --key <key> --value "<value>"
 uv run rlm result <session_id> --all
 uv run rlm finalize <session_id> --answer "<text>"
+
+# Provider info
+uv run rlm providers
 ```
 
 **All commands must be prefixed with:** `cd /Users/marknutter/Kode/recursive-ai &&`
@@ -166,6 +174,22 @@ If nothing relevant is found, say "No findings for this chunk."
 ```
 
 For file-group chunks, you'll need the line counts from the scan metadata to know the end line for each file. Use the file listing from Step 1.
+
+### Pattern C: API-based dispatch (OpenAI Codex or other providers)
+
+Instead of Task subagents, you can dispatch chunks to an external LLM via `rlm analyze`. This is useful when using OpenAI models (Codex, GPT-4o, etc.) for analysis, or when running outside of Claude Code. Set `RLM_PROVIDER=openai` and `OPENAI_API_KEY` to use this mode.
+
+For line-range chunks:
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm analyze <session_id> --file <source_file> --lines <start_line>:<end_line>
+```
+
+For manifest chunks:
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm analyze <session_id> --chunk-id <chunk_id> --manifest <manifest_path>
+```
+
+The `analyze` command extracts content, sends it to the configured provider's API, and stores the result in the session automatically. You can read the findings from the output.
 
 ### After subagents return
 

@@ -14,7 +14,7 @@ from pathlib import Path
 SESSIONS_DIR = "/tmp/rlm-sessions"
 
 
-def init_session(query: str, target_path: str) -> dict:
+def init_session(query: str, target_path: str, provider: str = "") -> dict:
     """Create a new RLM session.
 
     Returns dict with session_id and session_dir.
@@ -23,10 +23,15 @@ def init_session(query: str, target_path: str) -> dict:
     session_dir = os.path.join(SESSIONS_DIR, session_id)
     os.makedirs(session_dir, exist_ok=True)
 
+    # Resolve provider from arg or env
+    if not provider:
+        provider = os.environ.get("RLM_PROVIDER", "claude")
+
     state = {
         "session_id": session_id,
         "query": query,
         "target_path": str(Path(target_path).resolve()),
+        "provider": provider,
         "created_at": time.time(),
         "iterations": [],
         "results": {},
@@ -178,6 +183,7 @@ def format_status(session_id: str) -> str:
         f"Session: {session_id}",
         f"Query: {state['query']}",
         f"Target: {state['target_path']}",
+        f"Provider: {state.get('provider', 'claude')}",
         f"Status: {state['status']}",
         f"Iterations: {len(state['iterations'])}",
         f"Results: {len(state.get('results', {}))} entries",

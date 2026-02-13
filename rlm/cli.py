@@ -7,7 +7,8 @@ import argparse
 import json
 import sys
 
-from rlm import scanner, chunker, extractor, state
+from rlm import scanner, chunker, extractor, state, analyzer
+from rlm.providers import get_provider, list_providers
 
 MAX_OUTPUT = 4000
 
@@ -165,6 +166,75 @@ def cmd_result(args):
         sys.exit(1)
 
 
+def cmd_analyze(args):
+    """Analyze a chunk using the configured LLM provider."""
+    # Get session query
+    session_state = state.get_state(args.session_id)
+    if isinstance(session_state.get("error"), str):
+        _print(f"Error: {session_state['error']}")
+        sys.exit(1)
+
+    query = session_state["query"]
+
+    if args.lines and args.file:
+        parts = args.lines.split(":")
+        if len(parts) != 2:
+            _print("Error: --lines format is START:END (e.g., 1:50)")
+            sys.exit(1)
+        start, end = int(parts[0]), int(parts[1])
+        result = analyzer.analyze_file_range(
+            session_id=args.session_id,
+            query=query,
+            filepath=args.file,
+            start_line=start,
+            end_line=end,
+            chunk_id=args.chunk_id or "",
+            provider_name=args.provider,
+        )
+    elif args.chunk_id and args.manifest:
+        result = analyzer.analyze_manifest_chunk(
+            session_id=args.session_id,
+            query=query,
+            manifest_path=args.manifest,
+            chunk_id=args.chunk_id,
+            provider_name=args.provider,
+        )
+    else:
+        _print("Error: Specify --file PATH --lines START:END or --chunk-id ID --manifest PATH")
+        sys.exit(1)
+
+    if result.get("status") == "error":
+        _print(f"Error: {result['error']}")
+        sys.exit(1)
+
+    lines = [
+        f"Provider: {result['provider']} ({result['model']})",
+        f"Chunk: {result['chunk_id']}",
+        f"",
+        result["findings"],
+    ]
+    _print("\n".join(lines))
+
+
+def cmd_providers(args):
+    """List available LLM providers."""
+    import os
+    current = os.environ.get("RLM_PROVIDER", "claude")
+    lines = ["Available providers:\n"]
+    for p in list_providers():
+        marker = " *" if p == current else ""
+        try:
+            provider = get_provider(p)
+            lines.append(f"  {p}: model={provider.get_model()}{marker}")
+        except Exception as e:
+            lines.append(f"  {p}: (error: {e}){marker}")
+    lines.append(f"\nActive: {current} (set RLM_PROVIDER to change)")
+    model_override = os.environ.get("RLM_MODEL", "")
+    if model_override:
+        lines.append(f"Model override: {model_override}")
+    _print("\n".join(lines))
+
+
 def cmd_finalize(args):
     """Mark session as complete."""
     result = state.set_final(args.session_id, args.answer or "")
@@ -234,6 +304,20 @@ def main():
     p_result.add_argument("--value", help="Result value to store")
     p_result.add_argument("--all", action="store_true", help="Show all results summary")
     p_result.set_defaults(func=cmd_result)
+
+    # analyze
+    p_analyze = subparsers.add_parser("analyze", help="Analyze a chunk via LLM provider")
+    p_analyze.add_argument("session_id", help="Session ID")
+    p_analyze.add_argument("--file", help="File path to analyze")
+    p_analyze.add_argument("--lines", help="Line range START:END")
+    p_analyze.add_argument("--chunk-id", help="Chunk ID")
+    p_analyze.add_argument("--manifest", help="Manifest file path")
+    p_analyze.add_argument("--provider", help="Provider override (openai, claude)")
+    p_analyze.set_defaults(func=cmd_analyze)
+
+    # providers
+    p_providers = subparsers.add_parser("providers", help="List available LLM providers")
+    p_providers.set_defaults(func=cmd_providers)
 
     # finalize
     p_finalize = subparsers.add_parser("finalize", help="Mark session complete")

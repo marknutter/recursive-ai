@@ -1,1 +1,1 @@
-"""RLM: Recursive Language Model for Claude Code."""
+"""RLM: Recursive Language Model for Claude Code & OpenAI Codex."""

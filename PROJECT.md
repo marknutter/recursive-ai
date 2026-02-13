@@ -7,3 +7,7 @@
 - [x] **Add exact CLI usage examples to the skill prompt.** Claude guessed wrong flags (`--chunk` instead of `--chunk-id`, `--session` on extract). Add a quick-reference block in SKILL.md showing the exact syntax for each command, especially extract variants: `--lines START:END`, `--chunk-id ID --manifest PATH`, `--grep PATTERN`.
 
 - [x] **Add file-group chunk dispatch pattern.** When using `files_directory`/`files_language`/`files_balanced`, the chunks contain file lists rather than line ranges. The skill prompt needs an explicit pattern for this: iterate the file list in each chunk, extract each file's content, and include all of them in a single subagent prompt per chunk group.
+
+## Multi-Provider Support
+
+- [x] **Add OpenAI Codex support.** Provider abstraction layer (`rlm/providers/`) with OpenAI and Anthropic backends using stdlib `urllib`. New `rlm analyze` CLI command dispatches chunks to the configured provider's API. Codex-compatible `codex/AGENTS.md` instructions file. Configuration via `RLM_PROVIDER`, `RLM_MODEL`, and API key env vars.
