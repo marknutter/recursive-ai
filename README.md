@@ -242,6 +242,7 @@ Language detection covers 40+ file extensions. Files with unrecognized extension
 
 - [Test 1: Self-Referential Test](test_results/01-self-referential-test.md) -- RLM analyzing its own codebase. Compares before/after skill prompt fix, achieving 22x context leverage.
 - [Test 3: Security Audit (Juice Shop)](test_results/03-security-audit-test.md) -- 83 vulnerabilities found in OWASP Juice Shop (95K lines). 81% recall on known categories, 63x context leverage.
+- [Test 4: Scale Test (CPython stdlib)](test_results/04-scale-test.md) -- 100+ architectural patterns cataloged across CPython's 1.18M-line standard library (45MB). Bounded output held, 5,600x leverage ratio on total codebase.
 
 ## Troubleshooting
 
