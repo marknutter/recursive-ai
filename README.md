@@ -238,6 +238,11 @@ Language detection covers 40+ file extensions. Files with unrecognized extension
 | **Speed** | Fast for small targets | Slower setup, but parallelized analysis |
 | **Best for** | Files that fit in context | Large codebases, exhaustive analysis, security audits |
 
+## Test Results
+
+- [Test 1: Self-Referential Test](test_results/01-self-referential-test.md) -- RLM analyzing its own codebase. Compares before/after skill prompt fix, achieving 22x context leverage.
+- [Test 3: Security Audit (Juice Shop)](test_results/03-security-audit-test.md) -- 83 vulnerabilities found in OWASP Juice Shop (95K lines). 81% recall on known categories, 63x context leverage.
+
 ## Troubleshooting
 
 **`/rlm` command not found:** Run `bash install.sh` again to re-symlink the skill. Make sure `~/.claude/skills/rlm/SKILL.md` exists.
