@@ -232,6 +232,71 @@ Present the final answer directly to the user.
 - **Small targets:** Files under 200 lines can be dispatched to a single subagent without chunking.
 - **Targeted drill-down:** If scan metadata shows only 2-3 relevant files, chunk only those files, not the whole directory.
 
+## Memory Operations
+
+RLM includes a persistent memory system at `~/.rlm/memory/`. Memories survive across sessions and reboots.
+
+### Memory CLI Reference
+
+```bash
+# Store a memory
+uv run rlm remember "content" --tags "tag1,tag2" --summary "short description"
+uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "short description"
+
+# Search memory (keyword matching on summaries + tags)
+uv run rlm recall "search query" [--tags tag1,tag2] [--max 20]
+
+# Extract memory content (FOR SUBAGENT USE ONLY)
+uv run rlm memory-extract <entry_id> [--chunk-id <chunk_id>]
+
+# Browse memories
+uv run rlm memory-list [--tags tag1,tag2] [--offset 0] [--limit 50]
+uv run rlm memory-tags
+
+# Delete a memory
+uv run rlm forget <entry_id>
+```
+
+### Pre-Analysis: Check Memory
+
+Before starting a new analysis (after Step 0, before Step 1), check if you have prior knowledge about this target:
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "<keywords from query and target path>"
+```
+
+If relevant memories exist, dispatch a subagent to extract and summarize them:
+
+```
+Task subagent prompt (general-purpose, haiku model):
+
+Retrieve prior findings for this analysis target.
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id>
+```
+
+Summarize the key findings from this prior analysis. What was found? What areas were covered?
+```
+
+Use prior findings to:
+- Focus on areas not previously analyzed
+- Check if previously found issues are still present
+- Build on existing knowledge rather than starting from scratch
+
+### Post-Analysis: Store Findings
+
+After Step 5 (synthesize), store the key findings as a memory:
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember "<synthesized findings summary>" --tags "<target,query-type,key-topics>" --summary "<what was analyzed and key results>"
+```
+
+**Always provide explicit `--tags` and `--summary`** when storing. Include:
+- Target identifier (project name, directory)
+- Analysis type (security-audit, architecture-review, etc.)
+- Key topics found
+
 ## Error Handling
 
 - If a subagent returns an error, retry once with a simpler prompt
