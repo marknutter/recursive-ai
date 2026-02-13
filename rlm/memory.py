@@ -173,6 +173,7 @@ def search_index(
     query: str,
     tags: list[str] | None = None,
     max_results: int = 20,
+    deep: bool = False,
 ) -> list[dict]:
     """Search the memory index by keyword scoring.
 
@@ -180,6 +181,7 @@ def search_index(
     - +3 for each query keyword found in summary
     - +2 for each query keyword matching a tag exactly
     - +1 for partial matches (keyword is substring of tag or summary word)
+    - If deep=True, also scan entry content (+1 per keyword found in content)
     """
     index = load_index()
     if not index:
@@ -218,11 +220,33 @@ def search_index(
                         score += 1
                         break
 
+        # Deep search: scan actual content
+        if deep:
+            content = _load_content_for_search(entry["id"])
+            if content:
+                content_lower = content.lower()
+                for kw in keywords:
+                    if kw in content_lower:
+                        score += 1
+
         if score > 0:
             scored.append({**entry, "score": score})
 
     scored.sort(key=lambda x: (-x["score"], -x.get("timestamp", 0)))
     return scored[:max_results]
+
+
+def _load_content_for_search(entry_id: str) -> str | None:
+    """Load just the content field from an entry for search purposes."""
+    entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
+    if not os.path.isfile(entry_path):
+        return None
+    try:
+        with open(entry_path, "r") as f:
+            entry = json.load(f)
+        return entry.get("content", "")
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def delete_memory(entry_id: str) -> dict:

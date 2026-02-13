@@ -222,7 +222,9 @@ def cmd_remember(args):
 def cmd_recall(args):
     """Search memory and return matching entries."""
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-    results = memory.search_index(args.query, tags=tags, max_results=args.max)
+    results = memory.search_index(
+        args.query, tags=tags, max_results=args.max, deep=args.deep,
+    )
     _print(memory.format_search_results(results))
 
 
@@ -344,6 +346,7 @@ def main():
     p_recall.add_argument("query", help="Search query")
     p_recall.add_argument("--tags", help="Filter by comma-separated tags")
     p_recall.add_argument("--max", type=int, default=20, help="Max results")
+    p_recall.add_argument("--deep", action="store_true", help="Also search content (slower)")
     p_recall.set_defaults(func=cmd_recall)
 
     # memory-extract
