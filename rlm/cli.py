@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 
-from rlm import scanner, chunker, extractor, state
+from rlm import scanner, chunker, extractor, state, memory
 
 MAX_OUTPUT = 4000
 
@@ -174,6 +174,95 @@ def cmd_finalize(args):
         _print(f"Session {args.session_id} marked as complete")
 
 
+def cmd_remember(args):
+    """Store a new memory entry."""
+    if args.file:
+        try:
+            with open(args.file, "r", errors="replace") as f:
+                content = f.read()
+        except OSError as e:
+            _print(f"Error reading file: {e}")
+            sys.exit(1)
+        source = "file"
+        source_name = args.file
+    elif args.stdin:
+        content = sys.stdin.read()
+        source = "stdin"
+        source_name = None
+    elif args.content:
+        content = args.content
+        source = "text"
+        source_name = None
+    else:
+        _print("Error: Provide content as argument, --file PATH, or --stdin")
+        sys.exit(1)
+
+    if not content.strip():
+        _print("Error: Empty content")
+        sys.exit(1)
+
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    result = memory.add_memory(
+        content=content,
+        tags=tags,
+        source=source,
+        source_name=source_name,
+        summary=args.summary,
+    )
+
+    lines = [
+        f"Memory stored: {result['id']}",
+        f"Summary: {result['summary']}",
+        f"Tags: {', '.join(result['tags'])}",
+        f"Size: {result['char_count']:,} chars",
+    ]
+    _print("\n".join(lines))
+
+
+def cmd_recall(args):
+    """Search memory and return matching entries."""
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    results = memory.search_index(args.query, tags=tags, max_results=args.max)
+    _print(memory.format_search_results(results))
+
+
+def cmd_memory_extract(args):
+    """Extract content from a memory entry."""
+    content = memory.get_memory_content(args.entry_id, chunk_id=args.chunk_id)
+    _print(content)
+
+
+def cmd_memory_list(args):
+    """List all memory entries."""
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    _print(memory.format_index_summary(
+        tags=tags,
+        offset=args.offset,
+        limit=args.limit,
+    ))
+
+
+def cmd_memory_tags(args):
+    """List all tags with counts."""
+    tag_counts = memory.list_tags()
+    if not tag_counts:
+        _print("No tags found. Memory store is empty.")
+        return
+    lines = [f"Tags ({len(tag_counts)} unique):\n"]
+    for tag, count in tag_counts.items():
+        lines.append(f"  {tag}: {count}")
+    _print("\n".join(lines))
+
+
+def cmd_forget(args):
+    """Delete a memory entry."""
+    result = memory.delete_memory(args.entry_id)
+    if "error" in result:
+        _print(f"Error: {result['error']}")
+        sys.exit(1)
+    _print(f"Deleted: {result['id']}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="rlm",
@@ -240,6 +329,44 @@ def main():
     p_finalize.add_argument("session_id", help="Session ID")
     p_finalize.add_argument("--answer", help="Final answer text")
     p_finalize.set_defaults(func=cmd_finalize)
+
+    # remember
+    p_remember = subparsers.add_parser("remember", help="Store a memory entry")
+    p_remember.add_argument("content", nargs="?", help="Text content to remember")
+    p_remember.add_argument("--file", help="File to store as memory")
+    p_remember.add_argument("--stdin", action="store_true", help="Read from stdin")
+    p_remember.add_argument("--tags", help="Comma-separated tags")
+    p_remember.add_argument("--summary", help="Short description (auto-generated if omitted)")
+    p_remember.set_defaults(func=cmd_remember)
+
+    # recall
+    p_recall = subparsers.add_parser("recall", help="Search memory")
+    p_recall.add_argument("query", help="Search query")
+    p_recall.add_argument("--tags", help="Filter by comma-separated tags")
+    p_recall.add_argument("--max", type=int, default=20, help="Max results")
+    p_recall.set_defaults(func=cmd_recall)
+
+    # memory-extract
+    p_mextract = subparsers.add_parser("memory-extract", help="Extract memory content")
+    p_mextract.add_argument("entry_id", help="Memory entry ID")
+    p_mextract.add_argument("--chunk-id", help="Specific chunk ID")
+    p_mextract.set_defaults(func=cmd_memory_extract)
+
+    # memory-list
+    p_mlist = subparsers.add_parser("memory-list", help="List all memories")
+    p_mlist.add_argument("--tags", help="Filter by comma-separated tags")
+    p_mlist.add_argument("--offset", type=int, default=0, help="Skip first N entries")
+    p_mlist.add_argument("--limit", type=int, default=50, help="Max entries to show")
+    p_mlist.set_defaults(func=cmd_memory_list)
+
+    # memory-tags
+    p_mtags = subparsers.add_parser("memory-tags", help="List all tags")
+    p_mtags.set_defaults(func=cmd_memory_tags)
+
+    # forget
+    p_forget = subparsers.add_parser("forget", help="Delete a memory entry")
+    p_forget.add_argument("entry_id", help="Memory entry ID to delete")
+    p_forget.set_defaults(func=cmd_forget)
 
     args = parser.parse_args()
     args.func(args)
