@@ -240,10 +240,18 @@ Language detection covers 40+ file extensions. Files with unrecognized extension
 
 ## Test Results
 
-- [Test 1: Self-Referential Test](test_results/01-self-referential-test.md) -- RLM analyzing its own codebase. Compares before/after skill prompt fix, achieving 22x context leverage.
-- [Test 2: Security Audit (Juice Shop)](test_results/02-security-audit-test.md) -- 83 vulnerabilities found in OWASP Juice Shop (95K lines). 81% recall on known categories, 63x context leverage.
-- [Test 3: Scale Test (CPython stdlib)](test_results/03-scale-test.md) -- 100+ architectural patterns cataloged across CPython's 1.18M-line standard library (45MB). Bounded output held, 5,600x leverage ratio on total codebase.
-- [Test 4: Eval Safety Audit (CPython stdlib)](test_results/04-eval-safety-test.md) -- 455 eval() calls classified across CPython's stdlib. Found critical RCE in logging/config.py listen(). First test to exercise the recursive iteration loop (grep-first, wave 1, drill-down, synthesize).
+### RLM (Recursive Analysis)
+
+- [Test 1: Self-Referential Test](test_results/rlm/01-self-referential-test.md) -- RLM analyzing its own codebase. Compares before/after skill prompt fix, achieving 22x context leverage.
+- [Test 2: Security Audit (Juice Shop)](test_results/rlm/02-security-audit-test.md) -- 83 vulnerabilities found in OWASP Juice Shop (95K lines). 81% recall on known categories, 63x context leverage.
+- [Test 3: Scale Test (CPython stdlib)](test_results/rlm/03-scale-test.md) -- 100+ architectural patterns cataloged across CPython's 1.18M-line standard library (45MB). Bounded output held, 5,600x leverage ratio on total codebase.
+- [Test 4: Eval Safety Audit (CPython stdlib)](test_results/rlm/04-eval-safety-test.md) -- 455 eval() calls classified across CPython's stdlib. Found critical RCE in logging/config.py listen(). First test to exercise the recursive iteration loop (grep-first, wave 1, drill-down, synthesize).
+
+### Recall (Persistent Memory)
+
+- [Test 1: "san diego"](test_results/recall/01-san-diego-recall.md) -- Searched 336 memory entries across 15 years of chat history. Found 5 scattered mentions across 2004-2009, 16 subagent dispatches, 3m21s.
+- [Test 2: "synopit"](test_results/recall/02-synopit-recall.md) -- Reconstructed full startup timeline (concept → launch → font issues → early users) from 4 weekly archives. 1 subagent, 42s.
+- [Test 3: "what did Goober say about Futurama"](test_results/recall/03-goober-futurama-recall.md) -- Truthful negative: Goober had 1 mention. System identified the actual Futurama fans (Mike C, Dong The Wise, King Prawn) with attributed quotes across 4 time periods.
 
 ## Troubleshooting
 
