@@ -1,7 +1,7 @@
 ---
 name: rlm
-description: Recursively analyze content beyond context limits using sub-LLM delegation (based on the RLM paper)
-argument-hint: "query" path/to/content
+description: Recursive analysis, persistent memory recall, and knowledge storage
+argument-hint: "query" [path] | remember "content" [--tags t1,t2]
 user_invocable: true
 ---
 
@@ -47,17 +47,22 @@ uv run rlm finalize <session_id> --answer "<text>"
 
 **All commands must be prefixed with:** `cd /Users/marknutter/Kode/recursive-ai &&`
 
-## Step 0: Parse Arguments and Initialize
+## Step 0: Parse Arguments and Route
 
-The user invoked `/rlm <args>`. Parse the arguments to extract:
-- **query**: The analysis question (in quotes)
-- **target_path**: The file or directory to analyze
+The user invoked `/rlm <args>`. Parse the arguments to determine the mode:
 
 ```
 <user_args>
 {{ARGS}}
 </user_args>
 ```
+
+**Mode detection:**
+- `remember "content"` or `remember --file path` → **Store mode** (jump to [Memory: Store](#memory-store))
+- `"query"` with NO path → **Recall mode** (jump to [Memory: Recall](#memory-recall))
+- `"query" path/to/content` → **Analysis mode** (continue to Step 1 below)
+
+### Analysis mode: Initialize
 
 Parse the quoted query and the path from the args. Then initialize:
 
@@ -232,74 +237,224 @@ Present the final answer directly to the user.
 - **Small targets:** Files under 200 lines can be dispatched to a single subagent without chunking.
 - **Targeted drill-down:** If scan metadata shows only 2-3 relevant files, chunk only those files, not the whole directory.
 
-## Memory Operations
-
-RLM includes a persistent memory system at `~/.rlm/memory/`. Memories survive across sessions and reboots.
-
-### Memory CLI Reference
-
-```bash
-# Store a memory
-uv run rlm remember "content" --tags "tag1,tag2" --summary "short description"
-uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "short description"
-
-# Search memory (keyword matching on summaries + tags)
-uv run rlm recall "search query" [--tags tag1,tag2] [--max 20]
-
-# Extract memory content (FOR SUBAGENT USE ONLY)
-uv run rlm memory-extract <entry_id> [--chunk-id <chunk_id>]
-
-# Browse memories
-uv run rlm memory-list [--tags tag1,tag2] [--offset 0] [--limit 50]
-uv run rlm memory-tags
-
-# Delete a memory
-uv run rlm forget <entry_id>
-```
+## Analysis: Pre/Post Memory Integration
 
 ### Pre-Analysis: Check Memory
 
 Before starting a new analysis (after Step 0, before Step 1), check if you have prior knowledge about this target:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "<keywords from query and target path>"
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "<keywords from query and target path>" --deep
 ```
 
-If relevant memories exist, dispatch a subagent to extract and summarize them:
-
-```
-Task subagent prompt (general-purpose, haiku model):
-
-Retrieve prior findings for this analysis target.
-
-```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id>
-```
-
-Summarize the key findings from this prior analysis. What was found? What areas were covered?
-```
-
-Use prior findings to:
-- Focus on areas not previously analyzed
-- Check if previously found issues are still present
-- Build on existing knowledge rather than starting from scratch
+If relevant memories exist, dispatch a subagent to extract and summarize them. Use prior findings to focus on areas not previously analyzed or check if previously found issues persist.
 
 ### Post-Analysis: Store Findings
 
-After Step 5 (synthesize), store the key findings as a memory:
+After Step 5 (synthesize), store key findings as a memory:
 
 ```bash
 cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember "<synthesized findings summary>" --tags "<target,query-type,key-topics>" --summary "<what was analyzed and key results>"
 ```
 
-**Always provide explicit `--tags` and `--summary`** when storing. Include:
-- Target identifier (project name, directory)
-- Analysis type (security-audit, architecture-review, etc.)
-- Key topics found
+Always provide explicit `--tags` and `--summary`. Include target identifier, analysis type, and key topics.
+
+---
+
+## <a id="memory-recall"></a>Memory: Recall
+
+Recall mode searches the persistent memory store at `~/.rlm/memory/` and uses subagent evaluation to synthesize answers from matching entries.
+
+### Memory CLI Reference
+
+```bash
+# Search (deep scans content, not just summaries)
+uv run rlm recall "query" --deep [--tags tag1,tag2] [--max 20]
+
+# Pre-filter: grep within a memory entry (BEFORE dispatching subagent)
+uv run rlm memory-extract <entry_id> --grep "pattern" [--context 3]
+
+# Extract full content (FOR SUBAGENT USE ONLY)
+uv run rlm memory-extract <entry_id> [--chunk-id <chunk_id>]
+
+# Browse
+uv run rlm memory-list [--tags tag1,tag2] [--offset 0] [--limit 50]
+uv run rlm memory-tags
+
+# Strategy and performance
+uv run rlm strategy show          # Load learned retrieval patterns
+uv run rlm strategy log           # Review past performance
+uv run rlm strategy perf --query "..." --entries-found N --entries-relevant N --subagents N --notes "..."
+
+# Delete a memory
+uv run rlm forget <entry_id>
+```
+
+### Recall Step 0: Load Learned Patterns
+
+Before starting, check for accumulated retrieval strategies from previous sessions:
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm strategy show
+```
+
+If patterns exist, incorporate them into your approach. These are heuristics discovered through past recall operations — they should influence your search terms, dispatch strategy, and evaluation focus.
+
+### Recall Step 1: Search
+
+Run a deep search. **Always use `--deep`** — it scans entry content, not just summaries/tags:
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "search query" --deep
+```
+
+**Adaptive search strategy:** Consider whether the query might use different vocabulary in the stored content. If so, run multiple searches with variant terms. For example:
+- "Iraq war" → also try "Iraq Bush invasion WMD"
+- "authentication" → also try "auth login password"
+- A person's name → also try their known nicknames
+
+**Decision point:**
+- **0 results**: Try broader/different keywords, or browse with `memory-list`/`memory-tags`
+- **1-5 results**: Proceed to grep pre-filtering
+- **6+ results**: Start with the top 5-8, expand only if synthesis is incomplete
+
+### Recall Step 2: Grep Pre-Filtering
+
+**BEFORE dispatching subagents, use grep to confirm which entries contain relevant content.** This eliminates false positives and drastically reduces wasted subagent dispatches.
+
+For each search result, run:
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id> --grep "keyword" --context 3
+```
+
+**What grep tells you:**
+- **"No matches"** → Skip this entry. Deep search scored it but the keyword appears in metadata, not meaningful content.
+- **1-3 matches** → Small, focused hit. The grep output itself may contain enough context — consider skipping the subagent.
+- **Many matches** → Rich entry. Dispatch a subagent for full evaluation.
+
+**Optimization:** Run multiple grep calls in parallel since they're independent.
+
+### Recall Step 3: Dispatch Subagents (Graduated)
+
+Only dispatch subagents for entries that passed grep pre-filtering.
+
+**Graduated dispatch — start small, expand if needed:**
+
+1. **First wave (top 4-5 entries):** Dispatch subagents for the highest-scoring entries that had grep hits
+2. **Evaluate first wave results.** If the query is well-answered, stop. If gaps remain, dispatch more.
+3. **Second wave (if needed):** Process the next batch
+
+**Subagent prompt template:**
+
+```
+Retrieve and evaluate this memory entry for relevance to the query: "<user's query>"
+
+Pre-filter grep showed these relevant sections:
+<paste grep output here>
+
+Extract the full content for deeper context:
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id>
+```
+
+If the entry is large (>10K chars), focus your reading on the sections identified by grep.
+If the entry has chunks, extract specific chunks:
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id> --chunk-id <chunk_id>
+```
+
+Return:
+1. **Relevant?** yes/no
+2. **Key information:** Specific facts, findings, or knowledge relevant to the query (include attributed quotes where available)
+3. **Summary:** 2-3 sentence summary of what this memory contains
+```
+
+**Dispatch rules:**
+- Up to 4 subagents in parallel per wave
+- Use `haiku` model for speed
+- Include the grep pre-filter output in the prompt so subagents know where to focus
+- For entries where grep returned sufficient context (1-3 matches with clear answers), skip the subagent and use the grep output directly
+
+### Recall Step 4: Synthesize
+
+After subagents return:
+
+1. Filter out irrelevant entries
+2. Combine key information from relevant entries
+3. Present to the user:
+   - What was found (with attributed quotes where available)
+   - Where it came from (memory entry IDs)
+   - Any gaps (if the query isn't fully answered)
+4. If the first wave was insufficient, dispatch a second wave before giving up
+
+### Recall Step 5: Log Performance and Learn
+
+**After every recall session**, log what happened and assess whether you discovered a reusable pattern.
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm strategy perf \
+  --query "the user's original query" \
+  --search-terms "term1,term2,term3" \
+  --entries-found <total from search> \
+  --entries-relevant <entries confirmed relevant> \
+  --subagents <total dispatched> \
+  --notes "Brief note on what worked or didn't"
+```
+
+**Assess and learn:** Consider:
+- Did your search terms miss relevant content? Note which vocabulary variants worked.
+- Were many subagents wasted? Note what grep patterns would have filtered them out.
+- Did you discover a cross-referencing pattern? (e.g., "check adjacent time periods")
+
+If you discovered a reusable pattern, **write it to the learned patterns file** using the Edit or Write tool:
+
+```
+~/.rlm/strategies/learned_patterns.md
+```
+
+Format:
+```markdown
+### <Short pattern name>
+**Discovered:** <date>
+**Context:** <what revealed this>
+**Pattern:** <the reusable heuristic, stated as an instruction>
+```
+
+### Recall Quick-Paths
+
+- **Small result set (1-3 entries, all <5K chars):** Skip subagents. Grep + direct reading is faster.
+- **Exact match:** If one result scores much higher than others, extract only that one.
+- **Tag browsing:** For "what do I know about X?" queries, browse by tag first (`memory-list --tags X`).
+
+---
+
+## <a id="memory-store"></a>Memory: Store
+
+Store mode saves content to persistent memory.
+
+Parse the arguments for:
+- **content**: Text to store (in quotes), OR
+- **--file path**: File to store
+- **--tags tag1,tag2**: Comma-separated tags (always provide)
+- **--summary "..."**: Short description (always provide)
+
+```bash
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember "content" --tags "tag1,tag2" --summary "short description"
+cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "short description"
+```
+
+If the user provides content without explicit tags/summary, generate good ones:
+- **Tags**: 3-6 lowercase keywords covering topic, source type, and key entities
+- **Summary**: Under 80 chars, captures what this knowledge is about
+
+Confirm what was stored (ID, summary, tags, size).
+
+---
 
 ## Error Handling
 
 - If a subagent returns an error, retry once with a simpler prompt
 - If CLI commands fail, check the path exists and session is valid
 - If no findings emerge after 2 full iterations, try a different chunking strategy
-- Always degrade gracefully -- partial results are better than no results
+- If the memory store is empty, tell the user and suggest storing knowledge first
+- Always degrade gracefully — partial results are better than no results

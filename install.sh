@@ -22,4 +22,8 @@ uv sync
 
 echo ""
 echo "Done! You can now use /rlm in Claude Code."
-echo "Example: /rlm \"find security issues\" ./src/"
+echo ""
+echo "Usage:"
+echo "  /rlm \"find security issues\" ./src/     # Analyze content"
+echo "  /rlm \"what do I know about auth?\"       # Recall from memory"
+echo "  /rlm remember \"important finding\" --tags \"security\"  # Store to memory"
