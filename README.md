@@ -252,6 +252,7 @@ Language detection covers 40+ file extensions. Files with unrecognized extension
 - [Test 1: "san diego"](test_results/recall/01-san-diego-recall.md) -- Searched 336 memory entries across 15 years of chat history. Found 5 scattered mentions across 2004-2009, 16 subagent dispatches, 3m21s.
 - [Test 2: "synopit"](test_results/recall/02-synopit-recall.md) -- Reconstructed full startup timeline (concept → launch → font issues → early users) from 4 weekly archives. 1 subagent, 42s.
 - [Test 3: "what did Goober say about Futurama"](test_results/recall/03-goober-futurama-recall.md) -- Truthful negative: Goober had 1 mention. System identified the actual Futurama fans (Mike C, Dong The Wise, King Prawn) with attributed quotes across 4 time periods.
+- [Test 4: "what did everyone think about the Iraq war"](test_results/recall/04-iraq-war-opinions-recall.md) -- Political profiles of 8 people reconstructed from 3 years of debate (2002-2005). Captured spectrum from moral philosophy to policy critique to conspiracy theory. 6:1 anti-war ratio identified. The strongest demonstration of iterative retrieval + analysis vs. single-pass RAG.
 
 ## Troubleshooting
 
