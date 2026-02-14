@@ -161,3 +161,23 @@ The persistent memory system is a logical generalization of the RLM paper's arch
 The self-improving strategies extend the paper in a genuinely new direction. The paper gives you a powerful but stateless analysis tool. The strategies system makes it stateful — not by fine-tuning or retraining, but by having the LLM accumulate natural language heuristics about its own retrieval performance. Whether this constitutes a meaningful contribution to the field or just a clever hack depends on whether it scales beyond the current proof-of-concept stage. The early results are promising: 5 learned patterns measurably reduced subagent waste and improved search coverage across 4 diverse recall tests.
 
 The honest answer to "is this a logical extrapolation?" is: mostly yes, with one piece that's genuinely novel. The memory system is the paper applied to a different domain. The self-improving strategies are something new.
+
+## Next Steps
+
+Looking back at what FINDINGS.md identified, there are three categories: quality gaps, scaling gaps, and the novel piece that could be pushed further.
+
+**Biggest quality gap: semantic matching.** This is the most impactful problem. Keyword search can't find "authentication bypass" when you query "security vulnerabilities." Right now we mitigate with vocabulary variants in the skill prompt ("also try auth, login, password"), but that's the orchestrator guessing synonyms — it's brittle. Three options, escalating in complexity:
+
+1. **LLM-generated search expansion** — Before running `rlm recall`, have the orchestrator generate 3-5 keyword variants of the query using its own knowledge. No new dependencies, just a smarter prompt step. Cheapest to implement.
+2. **SQLite FTS5** — Replace the JSON index with SQLite full-text search. FTS5 has built-in ranking (BM25), handles stemming, and is still zero external dependencies (sqlite3 is in Python's stdlib). Solves both the semantic matching and the scale problem simultaneously.
+3. **Hybrid retrieval** — Vector embeddings for candidate identification, then RLM subagent evaluation for deep analysis. Most powerful, but breaks the zero-dependency principle and adds API costs for embedding computation.
+
+**Biggest scaling gap: the JSON index.** FINDINGS.md flagged this honestly — works at 337, gets slow around 1K, untenable at 10K. SQLite FTS5 fixes this and is a natural stepping stone. It also opens the door to more sophisticated queries (phrase matching, boolean operators, proximity search) without adding external dependencies.
+
+**The novel piece worth pushing further: self-improving strategies.** At 5 patterns it works. The FINDINGS.md identified three missing pieces:
+
+- **Confidence scoring** — Not all patterns are equally reliable. Some are validated across multiple sessions, others are one-off observations.
+- **Relevance-based selection** — Don't load all patterns into every recall session. Match patterns to the query type.
+- **Pruning** — Remove or merge patterns that contradict each other or become stale.
+
+**Priority**: SQLite FTS5 first, because it solves two problems at once (semantic matching via BM25 ranking + scale) with zero new dependencies. Then strategy scaling to build on the most novel aspect. The LLM-generated search expansion could be done quickly as a skill prompt change in parallel with either.
