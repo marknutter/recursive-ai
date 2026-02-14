@@ -28,49 +28,49 @@ Comprehensive political profiles of 8 group members reconstructed from conversat
 
 ### The Voices
 
-**Mike C — Most vocal critic**
+**User A — Most vocal critic**
 - War based on false WMD pretenses, served corporate interests (Halliburton)
 - "We attacked Iraq for breaking a law that we found out later they did not break." (Jul 2004)
 - "Iraq is about two things. Oil and history. We want the oil, and we want to erase the history of our own actions." (Jan 2005)
 - Cited coworker whose 22-year-old Marine daughter came home with breast cancer, possibly from depleted uranium
 
-**Goober — Anti-war, cynical realist**
+**User C — Anti-war, cynical realist**
 - "We plan on holding a fake election, marginalizing the insurgency, and training Iraqis to kill themselves while we sit back in our four brand new permanent military bases." (Jan 2005)
 - Acknowledged Saddam was a monster but noted US "had a hand in all of these wars and in Saddam's rise to power"
 
-**The Seminarian — Anti-war on moral grounds, but nuanced**
+**User E — Anti-war on moral grounds, but nuanced**
 - "I do not support the war, as I think it is an unjust one, a pre-emptive strike which has no precedent in moral tradition." (Jul 2004)
 - Pushed back on weak critiques: "No one really knows what Bush truly knew about WMDs... just because you state a falsehood does not mean you lied."
 
-**Dong The Wise — Pragmatic/resigned**
+**User F — Pragmatic/resigned**
 - "If it's a puppet state, then fine. At least it's us pulling the strings." (Jan 2005)
 - "Half our own population does not support any of this shit, but it will remain to happen anyway. Live with it."
 
-**Stegg — Anti-war, constitutionalist**
+**User B — Anti-war, constitutionalist**
 - Praised Ron Paul, called post-9/11 era "one of the most devastating blows to American Democracy/Freedom"
 
-**CrAZy CArL — Anti-war, conspiracy-minded**
+**User G — Anti-war, conspiracy-minded**
 - Called Rumsfeld "a complete piece of shit" and compared him to Wormtongue
 
-**Jen — Skeptical, questioned pro-war side**
+**User H — Skeptical, questioned pro-war side**
 - "So for those of you that support the war in Iraq, let me ask you this: Why?" (Jul 2004)
 
-**Greg-a-Byte — The lone hawk**
+**User D — The lone hawk**
 - Defended the invasion, argued WMDs existed but were moved/hidden
 - "Our lives are more precious than any fucking Iraqi scumbag." (Jul 2004)
 - Sole consistent defender, often outnumbered and combative
 
 ### Group Dynamic
 
-~6:1 against the war. Anti-war spectrum ranged from moral philosophy (The Seminarian) to policy critique (Mike C) to conspiracy theory (CrAZy CArL). Greg-a-Byte was the sole consistent hawk.
+~6:1 against the war. Anti-war spectrum ranged from moral philosophy (User E) to policy critique (User A) to conspiracy theory (User G). User D was the sole consistent hawk.
 
 ## Synthesis Quality
 
 This is the strongest recall test to date. The system:
 
 1. **Built longitudinal profiles** — synthesized each person's political position from quotes spanning 2002-2005, not just single mentions
-2. **Captured nuance** — The Seminarian's moral opposition was distinguished from Mike C's policy critique and Goober's cynical realism. These aren't interchangeable anti-war positions.
-3. **Preserved dissent** — Greg-a-Byte's pro-war minority view was faithfully represented with direct quotes, not editorially dismissed
+2. **Captured nuance** — User E's moral opposition was distinguished from User A's policy critique and User C's cynical realism. These aren't interchangeable anti-war positions.
+3. **Preserved dissent** — User D's pro-war minority view was faithfully represented with direct quotes, not editorially dismissed
 4. **Identified group dynamics** — correctly assessed the 6:1 ratio and characterized the debate as "heated, personal, and sustained across years"
 5. **Cross-referenced across time** — same person's quotes from different years composed into coherent ideological profiles
 

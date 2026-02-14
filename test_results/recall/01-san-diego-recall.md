@@ -27,18 +27,18 @@ Then checked remaining 4 entries in wave 5: 2 more matches found.
 
 5 San Diego mentions found across 2004-2009:
 
-1. **Goober on San Diego's protest scene** (Apr 2004) — "In San Diego the protest community is far small and immobile, this is a military town."
-2. **Greg-a-Byte's mailing address** (Oct 2004) — Posts a San Diego address during a political discussion.
-3. **Goober playing basketball in SD heat** (May 2008) — Planning basketball in "the hot San Diego heat."
-4. **SiPpiN H8R8's Google AdWords advice** (Jul 2008) — Suggests narrowing ad location to "San Diego, or Southern California."
-5. **BrokenBeat music recommendation** (Feb 2009) — The Seminarian recommends "BrokenBeat in San Diego, CA."
+1. **User C on San Diego's protest scene** (Apr 2004) — "In San Diego the protest community is far small and immobile, this is a military town."
+2. **User D's mailing address** (Oct 2004) — Posts a San Diego address during a political discussion.
+3. **User C playing basketball in SD heat** (May 2008) — Planning basketball in "the hot San Diego heat."
+4. **User M's Google AdWords advice** (Jul 2008) — Suggests narrowing ad location to "San Diego, or Southern California."
+5. **Music recommendation** (Feb 2009) — User E recommends "BrokenBeat in San Diego, CA."
 
 ## Synthesis Quality
 
 The system correctly:
 - Found scattered mentions across different time periods and contexts
 - Attributed each mention to the correct user
-- Noticed a cross-cutting pattern: "Goober seems to have been based there"
+- Noticed a cross-cutting pattern: "User C seems to have been based there"
 
 ## Performance Notes
 
