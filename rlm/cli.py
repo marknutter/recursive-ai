@@ -230,7 +230,12 @@ def cmd_recall(args):
 
 def cmd_memory_extract(args):
     """Extract content from a memory entry."""
-    content = memory.get_memory_content(args.entry_id, chunk_id=args.chunk_id)
+    if args.grep:
+        content = memory.grep_memory_content(
+            args.entry_id, args.grep, context=args.context,
+        )
+    else:
+        content = memory.get_memory_content(args.entry_id, chunk_id=args.chunk_id)
     _print(content)
 
 
@@ -263,6 +268,36 @@ def cmd_forget(args):
         _print(f"Error: {result['error']}")
         sys.exit(1)
     _print(f"Deleted: {result['id']}")
+
+
+def cmd_strategy(args):
+    """Strategy management subcommands."""
+    if args.strategy_action == "show":
+        patterns = memory.load_learned_patterns()
+        if not patterns:
+            _print("No learned patterns yet. File: " + memory.PATTERNS_PATH)
+        else:
+            _print(patterns)
+    elif args.strategy_action == "log":
+        _print(memory.format_performance_summary())
+    elif args.strategy_action == "perf":
+        data = {}
+        if args.query:
+            data["query"] = args.query
+        if args.search_terms:
+            data["search_terms"] = [t.strip() for t in args.search_terms.split(",")]
+        if args.entries_found is not None:
+            data["entries_found"] = args.entries_found
+        if args.entries_relevant is not None:
+            data["entries_relevant"] = args.entries_relevant
+        if args.subagents is not None:
+            data["subagents_dispatched"] = args.subagents
+        if args.notes:
+            data["strategy_notes"] = args.notes
+        memory.log_performance(data)
+        _print("Performance logged.")
+    else:
+        _print("Unknown strategy action. Use: show, log, perf")
 
 
 def main():
@@ -353,6 +388,8 @@ def main():
     p_mextract = subparsers.add_parser("memory-extract", help="Extract memory content")
     p_mextract.add_argument("entry_id", help="Memory entry ID")
     p_mextract.add_argument("--chunk-id", help="Specific chunk ID")
+    p_mextract.add_argument("--grep", help="Search pattern within entry")
+    p_mextract.add_argument("--context", type=int, default=3, help="Context lines for grep")
     p_mextract.set_defaults(func=cmd_memory_extract)
 
     # memory-list
@@ -370,6 +407,18 @@ def main():
     p_forget = subparsers.add_parser("forget", help="Delete a memory entry")
     p_forget.add_argument("entry_id", help="Memory entry ID to delete")
     p_forget.set_defaults(func=cmd_forget)
+
+    # strategy
+    p_strategy = subparsers.add_parser("strategy", help="Manage recall strategies")
+    p_strategy.add_argument("strategy_action", choices=["show", "log", "perf"],
+                            help="show=learned patterns, log=performance history, perf=log new entry")
+    p_strategy.add_argument("--query", help="Query that was run (perf)")
+    p_strategy.add_argument("--search-terms", help="Comma-separated search terms used (perf)")
+    p_strategy.add_argument("--entries-found", type=int, help="Total entries found (perf)")
+    p_strategy.add_argument("--entries-relevant", type=int, help="Relevant entries (perf)")
+    p_strategy.add_argument("--subagents", type=int, help="Subagents dispatched (perf)")
+    p_strategy.add_argument("--notes", help="Strategy notes (perf)")
+    p_strategy.set_defaults(func=cmd_strategy)
 
     args = parser.parse_args()
     args.func(args)

@@ -107,6 +107,10 @@ rlm/
                 Tracks the query, iteration log, accumulated subagent
                 results, and final answer.
 
+  memory.py     Persistent long-term memory. Storage, indexing, keyword
+                search, grep-within-entry, and bounded formatting. Entries
+                live at ~/.rlm/memory/ and persist across sessions.
+
   cli.py        CLI entry point. All Claude<->Python interaction goes
                 through subcommands. All output is capped at 4000 characters
                 with truncation notices, enforcing the bounded-output
@@ -117,7 +121,26 @@ skill/
                 Loaded into Claude Code when the user invokes /rlm. Contains
                 the 5-step orchestration loop, decision heuristics, subagent
                 dispatch patterns, and iteration limits.
+
+  RECALL_SKILL.md   The /recall skill prompt for memory retrieval. Implements
+                    a 6-step flow: load learned patterns, search, grep
+                    pre-filter, graduated subagent dispatch, synthesize,
+                    log performance and learn.
+
+  REMEMBER_SKILL.md The /remember skill prompt for storing memories.
 ```
+
+### Adaptive Retrieval
+
+The `/recall` skill uses a self-improving retrieval loop:
+
+1. **Learned patterns** -- Before each recall, load `~/.rlm/strategies/learned_patterns.md` -- heuristics discovered in previous sessions (e.g., "use vocabulary variants for topical queries").
+2. **Grep pre-filtering** -- Before dispatching subagents, grep within each candidate entry to confirm keyword presence. Eliminates false positives from index-level matching.
+3. **Graduated dispatch** -- Start with top entries, evaluate, expand only if synthesis is incomplete. Avoids the "16 subagents, 12 empty" problem.
+4. **Performance logging** -- After each session, log metrics (query, search terms, entries found/relevant, subagents used) to `~/.rlm/strategies/performance.jsonl`.
+5. **Pattern learning** -- If the agent discovers a reusable retrieval heuristic, it writes it to `learned_patterns.md`. Future sessions load and apply these patterns.
+
+This creates a feedback loop where the retrieval strategy improves with use -- the "model" being trained is the skill prompt's heuristics, the "training signal" is the agent's self-assessment, and the "weights" are the patterns file.
 
 ### Data Flow
 

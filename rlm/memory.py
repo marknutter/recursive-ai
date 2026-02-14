@@ -17,6 +17,10 @@ MEMORY_DIR = os.path.expanduser("~/.rlm/memory")
 ENTRIES_DIR = os.path.join(MEMORY_DIR, "entries")
 INDEX_PATH = os.path.join(MEMORY_DIR, "index.json")
 
+STRATEGIES_DIR = os.path.expanduser("~/.rlm/strategies")
+PATTERNS_PATH = os.path.join(STRATEGIES_DIR, "learned_patterns.md")
+PERF_LOG_PATH = os.path.join(STRATEGIES_DIR, "performance.jsonl")
+
 # Words to exclude from auto-tagging
 STOP_WORDS = {
     "the", "and", "for", "that", "this", "with", "from", "are", "was",
@@ -348,6 +352,137 @@ def format_search_results(results: list[dict], max_chars: int = 4000) -> str:
             remaining = len(results) - results.index(r) - 1
             if remaining > 0:
                 lines.append(f"\n  ... and {remaining} more results")
+            break
+
+    return "\n".join(lines)
+
+
+# --- Grep within memory entries ---
+
+
+def grep_memory_content(
+    entry_id: str, pattern: str, context: int = 3
+) -> str:
+    """Search within a memory entry and return matching lines with context.
+
+    Returns formatted output with line numbers and match markers.
+    """
+    content = get_memory_content(entry_id)
+    if content.startswith("Error:"):
+        return content
+
+    lines = content.splitlines()
+
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        regex = re.compile(re.escape(pattern), re.IGNORECASE)
+
+    matched_lines = set()
+    for i, line in enumerate(lines):
+        if regex.search(line):
+            matched_lines.add(i)
+
+    if not matched_lines:
+        return f"No matches for '{pattern}' in {entry_id}"
+
+    # Build context windows
+    output_lines = set()
+    for m in matched_lines:
+        for i in range(max(0, m - context), min(len(lines), m + context + 1)):
+            output_lines.add(i)
+
+    result = []
+    prev_i = -2
+    for i in sorted(output_lines):
+        if i > prev_i + 1 and result:
+            result.append("  ---")
+        marker = ">" if i in matched_lines else " "
+        result.append(f"{marker} {i+1:4d} | {lines[i]}")
+        prev_i = i
+
+    header = f"Grep '{pattern}' in {entry_id}: {len(matched_lines)} matches\n"
+    return header + "\n".join(result)
+
+
+# --- Strategies and performance tracking ---
+
+
+def init_strategies():
+    """Create strategies directory if needed."""
+    os.makedirs(STRATEGIES_DIR, exist_ok=True)
+
+
+def load_learned_patterns() -> str:
+    """Load learned patterns file content. Returns empty string if none."""
+    if not os.path.isfile(PATTERNS_PATH):
+        return ""
+    try:
+        with open(PATTERNS_PATH, "r") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def log_performance(data: dict):
+    """Append a performance log entry."""
+    init_strategies()
+    data["logged_at"] = time.time()
+    with open(PERF_LOG_PATH, "a") as f:
+        f.write(json.dumps(data) + "\n")
+
+
+def get_performance_log(last_n: int = 20) -> list[dict]:
+    """Read recent performance log entries."""
+    if not os.path.isfile(PERF_LOG_PATH):
+        return []
+    entries = []
+    try:
+        with open(PERF_LOG_PATH, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    except OSError:
+        return []
+    return entries[-last_n:]
+
+
+def format_performance_summary(
+    entries: list[dict] | None = None, max_chars: int = 4000
+) -> str:
+    """Format performance log into readable summary."""
+    if entries is None:
+        entries = get_performance_log()
+    if not entries:
+        return "No performance data logged yet."
+
+    lines = [f"Recall Performance Log ({len(entries)} sessions):\n"]
+
+    for e in entries:
+        query = e.get("query", "?")
+        search_terms = e.get("search_terms", [])
+        entries_found = e.get("entries_found", 0)
+        entries_relevant = e.get("entries_relevant", 0)
+        subagents = e.get("subagents_dispatched", 0)
+        strategy_notes = e.get("strategy_notes", "")
+
+        line = (
+            f"  Q: \"{query}\" | found:{entries_found}"
+            f" relevant:{entries_relevant} subagents:{subagents}"
+        )
+        if search_terms:
+            line += f" | terms: {', '.join(search_terms)}"
+        if strategy_notes:
+            line += f"\n    Notes: {strategy_notes}"
+        lines.append(line)
+
+        current = "\n".join(lines)
+        if len(current) > max_chars - 100:
+            lines.append("\n  ... and more entries")
             break
 
     return "\n".join(lines)
