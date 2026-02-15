@@ -334,13 +334,51 @@ cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id> -
 
 **Optimization:** Run multiple grep calls in parallel since they're independent.
 
-### Recall Step 3: Dispatch Subagents (Graduated)
+### Recall Step 3: Handle Large Memories with RLM Chunking
 
-Only dispatch subagents for entries that passed grep pre-filtering.
+**When a memory is large (>10KB), use RLM chunking instead of direct extraction.**
+
+The `recall` command annotates results with size categories:
+- `small` (<2KB): Direct extraction fine
+- `medium` (2-10KB): Grep pre-filtering recommended
+- `large` (10-50KB): **Use RLM chunking**
+- `huge` (>50KB): **Definitely use RLM chunking**
+
+**For large/huge memories, treat them as analysis targets:**
+
+1. Get the entry ID from search results
+2. Get the full content: `uv run rlm memory-extract <entry_id>`
+3. Write content to a temporary file
+4. Use RLM analysis mode on that file:
+   - Init session: `uv run rlm init "<query>" "<temp_file>"`
+   - Scan: Shows size, structure
+   - Chunk: Use `semantic` strategy for conversation transcripts
+   - Extract + analyze chunks with subagents
+   - Synthesize findings
+
+**This prevents context bloat** - you never load the full 50KB conversation into context, only the relevant extracted chunks.
+
+**Example workflow for a large conversation memory:**
+```bash
+# Search finds a large conversation
+uv run rlm recall "Iraq war" --deep
+# Output shows: m_abc123: 45,000 chars (large)
+
+# Extract to temp file
+uv run rlm memory-extract m_abc123 > /tmp/conversation.txt
+
+# Use RLM analysis
+uv run rlm init "opinions about Iraq war" /tmp/conversation.txt
+# ... then scan, chunk (semantic), dispatch subagents per usual RLM workflow
+```
+
+### Recall Step 4: Dispatch Subagents for Small Memories (Graduated)
+
+For small/medium memories that passed grep pre-filtering, dispatch subagents normally.
 
 **Graduated dispatch — start small, expand if needed:**
 
-1. **First wave (top 4-5 entries):** Dispatch subagents for the highest-scoring entries that had grep hits
+1. **First wave (top 4-5 entries):** Dispatch subagents for the highest-scoring small/medium entries that had grep hits
 2. **Evaluate first wave results.** If the query is well-answered, stop. If gaps remain, dispatch more.
 3. **Second wave (if needed):** Process the next batch
 
@@ -375,9 +413,9 @@ Return:
 - Include the grep pre-filter output in the prompt so subagents know where to focus
 - For entries where grep returned sufficient context (1-3 matches with clear answers), skip the subagent and use the grep output directly
 
-### Recall Step 4: Synthesize
+### Recall Step 5: Synthesize
 
-After subagents return:
+After subagents return (or after RLM analysis of large memories):
 
 1. Filter out irrelevant entries
 2. Combine key information from relevant entries
