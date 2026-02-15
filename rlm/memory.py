@@ -1,17 +1,21 @@
 """Persistent long-term memory system.
 
-Stores knowledge entries in ~/.rlm/memory/ with a lightweight index
-for fast search and bounded output. Follows the same patterns as state.py:
-file-based JSON persistence, error dicts, atomic writes.
+Stores knowledge entries in ~/.rlm/memory/ with a SQLite FTS5 index
+for full-text search with BM25 ranking and Porter stemming.
+
+Replaces the original JSON index. Auto-migrates from JSON on first use
+if index.json exists but memory.db does not.
 """
 
 import json
 import os
 import re
-import tempfile
+import sqlite3
+import threading
 import time
 import uuid
-from pathlib import Path
+
+from rlm import db
 
 MEMORY_DIR = os.path.expanduser("~/.rlm/memory")
 ENTRIES_DIR = os.path.join(MEMORY_DIR, "entries")
@@ -35,39 +39,101 @@ STOP_WORDS = {
     "used", "using", "because", "like", "make", "made",
 }
 
+_migration_lock = threading.Lock()
+_migrated = False
+
+
+def _ensure_db():
+    """Ensure the database exists, migrating from JSON if needed."""
+    global _migrated
+    if _migrated:
+        return
+    with _migration_lock:
+        if _migrated:
+            return
+        _migrated = True
+        # If JSON index exists but database does not, migrate
+        if os.path.isfile(INDEX_PATH) and not os.path.isfile(db.DB_PATH):
+            _migrate_json_to_sqlite()
+
+
+def _migrate_json_to_sqlite():
+    """One-time migration from JSON files to SQLite."""
+    import sys
+    print("Migrating memory store from JSON to SQLite FTS5...", file=sys.stderr)
+
+    try:
+        with open(INDEX_PATH, "r") as f:
+            index = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        index = []
+
+    migrated = 0
+    errors = 0
+    for entry_meta in index:
+        entry_id = entry_meta["id"]
+        entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
+
+        try:
+            with open(entry_path, "r") as f:
+                full_entry = json.load(f)
+
+            db.import_entry_from_json(full_entry)
+            migrated += 1
+        except (OSError, json.JSONDecodeError) as e:
+            # Entry file missing or corrupt -- create stub from index metadata
+            errors += 1
+            print(f"  Warning: {entry_id}: {e}", file=sys.stderr)
+            try:
+                db.insert_entry(
+                    entry_id=entry_id,
+                    summary=entry_meta.get("summary", ""),
+                    tags=entry_meta.get("tags", []),
+                    timestamp=entry_meta.get("timestamp", 0.0),
+                    source=entry_meta.get("source", "text"),
+                    source_name=entry_meta.get("source_name"),
+                    char_count=entry_meta.get("char_count", 0),
+                    content="[content unavailable -- original entry file missing]",
+                )
+            except sqlite3.IntegrityError:
+                pass  # already migrated
+            except Exception as inner_e:
+                print(f"  Error: failed to create stub for {entry_id}: {inner_e}",
+                      file=sys.stderr)
+
+    # Rebuild FTS index after bulk import
+    db.rebuild_fts_index()
+
+    # Rename old index to mark migration complete
+    backup_path = INDEX_PATH + ".bak"
+    try:
+        os.rename(INDEX_PATH, backup_path)
+    except OSError:
+        pass
+
+    print(
+        f"Migration complete: {migrated} entries imported"
+        + (f", {errors} with errors" if errors else "")
+        + f". Database: {db.DB_PATH}",
+        file=sys.stderr,
+    )
+    print(f"Old index backed up to: {backup_path}", file=sys.stderr)
+
 
 def init_memory_store():
-    """Create memory directories and index if they don't exist."""
-    os.makedirs(ENTRIES_DIR, exist_ok=True)
-    if not os.path.isfile(INDEX_PATH):
-        _save_index([])
+    """Ensure the memory store is ready."""
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    _ensure_db()
 
 
 def load_index() -> list[dict]:
-    """Load the memory index."""
-    if not os.path.isfile(INDEX_PATH):
-        return []
-    try:
-        with open(INDEX_PATH, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
+    """Load all entries as a list of metadata dicts.
 
-
-def _save_index(entries: list[dict]):
-    """Write the full index atomically (tempfile + rename)."""
-    os.makedirs(MEMORY_DIR, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=MEMORY_DIR, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(entries, f, indent=2)
-        os.replace(tmp_path, INDEX_PATH)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    Backward-compatible: returns the same format as the old JSON index.
+    """
+    _ensure_db()
+    entries, _ = db.list_all_entries(offset=0, limit=999999)
+    return entries
 
 
 def add_memory(
@@ -81,7 +147,7 @@ def add_memory(
 
     Returns dict with id, summary, tags, char_count.
     """
-    init_memory_store()
+    _ensure_db()
 
     entry_id = "m_" + uuid.uuid4().hex[:12]
     timestamp = time.time()
@@ -96,40 +162,22 @@ def add_memory(
     else:
         tags = [t.strip().lower() for t in tags if t.strip()]
 
-    # Build full entry
-    entry = {
-        "id": entry_id,
-        "summary": summary,
-        "tags": tags,
-        "timestamp": timestamp,
-        "source": source,
-        "source_name": source_name,
-        "char_count": len(content),
-        "content": content,
-    }
-
     # Chunk large content
+    chunks = None
     if len(content) > 10000:
-        entry["chunks"] = _chunk_content(content, entry_id)
+        chunks = _chunk_content(content, entry_id)
 
-    # Write entry file
-    entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
-    with open(entry_path, "w") as f:
-        json.dump(entry, f, indent=2)
-
-    # Update index
-    index = load_index()
-    index_entry = {
-        "id": entry_id,
-        "summary": summary,
-        "tags": tags,
-        "timestamp": timestamp,
-        "source": source,
-        "source_name": source_name,
-        "char_count": len(content),
-    }
-    index.append(index_entry)
-    _save_index(index)
+    db.insert_entry(
+        entry_id=entry_id,
+        summary=summary,
+        tags=tags,
+        timestamp=timestamp,
+        source=source,
+        source_name=source_name,
+        char_count=len(content),
+        content=content,
+        chunks=chunks,
+    )
 
     return {
         "id": entry_id,
@@ -141,14 +189,11 @@ def add_memory(
 
 def get_memory(entry_id: str) -> dict:
     """Load a full memory entry by ID."""
-    entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
-    if not os.path.isfile(entry_path):
+    _ensure_db()
+    entry = db.get_entry(entry_id)
+    if entry is None:
         return {"error": f"Memory entry not found: {entry_id}"}
-    try:
-        with open(entry_path, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        return {"error": f"Failed to load entry: {e}"}
+    return entry
 
 
 def get_memory_content(entry_id: str, chunk_id: str | None = None) -> str:
@@ -162,7 +207,7 @@ def get_memory_content(entry_id: str, chunk_id: str | None = None) -> str:
 
     content = entry.get("content", "")
 
-    if chunk_id and "chunks" in entry:
+    if chunk_id and "chunks" in entry and entry["chunks"]:
         for chunk in entry["chunks"]:
             if chunk["chunk_id"] == chunk_id:
                 start = chunk["start_char"]
@@ -179,106 +224,31 @@ def search_index(
     max_results: int = 20,
     deep: bool = False,
 ) -> list[dict]:
-    """Search the memory index by keyword scoring.
+    """Search memory using FTS5 full-text search with BM25 ranking.
 
-    Scoring:
-    - +3 for each query keyword found in summary
-    - +2 for each query keyword matching a tag exactly
-    - +1 for partial matches (keyword is substring of tag or summary word)
-    - If deep=True, also scan entry content (+1 per keyword found in content)
+    Uses Porter stemming -- "running" matches "run", "vulnerabilities"
+    matches "vulnerability", etc.
+
+    The `deep` parameter is accepted for backward compatibility but
+    is no longer needed: FTS5 always searches across summary, tags,
+    and content simultaneously.
     """
-    index = load_index()
-    if not index:
-        return []
-
-    keywords = _tokenize(query)
-    if not keywords:
-        return index[:max_results]
-
-    # Filter by tags if provided
-    if tags:
-        tags_lower = {t.strip().lower() for t in tags}
-        index = [e for e in index if tags_lower & set(e.get("tags", []))]
-
-    scored = []
-    for entry in index:
-        score = 0
-        summary_lower = entry.get("summary", "").lower()
-        entry_tags = [t.lower() for t in entry.get("tags", [])]
-
-        for kw in keywords:
-            # Exact match in summary words
-            if kw in summary_lower.split():
-                score += 3
-            # Substring match in summary
-            elif kw in summary_lower:
-                score += 1
-
-            # Exact tag match
-            if kw in entry_tags:
-                score += 2
-            else:
-                # Partial tag match
-                for tag in entry_tags:
-                    if kw in tag or tag in kw:
-                        score += 1
-                        break
-
-        # Deep search: scan actual content
-        if deep:
-            content = _load_content_for_search(entry["id"])
-            if content:
-                content_lower = content.lower()
-                for kw in keywords:
-                    if kw in content_lower:
-                        score += 1
-
-        if score > 0:
-            scored.append({**entry, "score": score})
-
-    scored.sort(key=lambda x: (-x["score"], -x.get("timestamp", 0)))
-    return scored[:max_results]
-
-
-def _load_content_for_search(entry_id: str) -> str | None:
-    """Load just the content field from an entry for search purposes."""
-    entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
-    if not os.path.isfile(entry_path):
-        return None
-    try:
-        with open(entry_path, "r") as f:
-            entry = json.load(f)
-        return entry.get("content", "")
-    except (json.JSONDecodeError, OSError):
-        return None
+    _ensure_db()
+    return db.search_fts(query, tags=tags, max_results=max_results)
 
 
 def delete_memory(entry_id: str) -> dict:
-    """Remove a memory entry and update the index."""
-    entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
-    if not os.path.isfile(entry_path):
-        return {"error": f"Memory entry not found: {entry_id}"}
-
-    try:
-        os.unlink(entry_path)
-    except OSError as e:
-        return {"error": f"Failed to delete entry: {e}"}
-
-    index = load_index()
-    index = [e for e in index if e["id"] != entry_id]
-    _save_index(index)
-
-    return {"status": "deleted", "id": entry_id}
+    """Remove a memory entry."""
+    _ensure_db()
+    if db.delete_entry(entry_id):
+        return {"status": "deleted", "id": entry_id}
+    return {"error": f"Memory entry not found: {entry_id}"}
 
 
 def list_tags() -> dict[str, int]:
     """Return all tags with their frequency counts."""
-    index = load_index()
-    tag_counts: dict[str, int] = {}
-    for entry in index:
-        for tag in entry.get("tags", []):
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-    return dict(sorted(tag_counts.items(), key=lambda x: (-x[1], x[0])))
+    _ensure_db()
+    return db.list_all_tags()
 
 
 def format_index_summary(
@@ -289,22 +259,24 @@ def format_index_summary(
     max_chars: int = 4000,
 ) -> str:
     """Format index entries into bounded human-readable summary."""
+    _ensure_db()
+
     if entries is None:
-        entries = load_index()
-
-    if tags:
-        tags_lower = {t.strip().lower() for t in tags}
-        entries = [e for e in entries if tags_lower & set(e.get("tags", []))]
-
-    total = len(entries)
-    entries = entries[offset:offset + limit]
+        entries, total = db.list_all_entries(tags=tags, offset=offset, limit=limit)
+    else:
+        # Caller provided entries -- filter and paginate in memory
+        if tags:
+            tags_lower = {t.strip().lower() for t in tags}
+            entries = [e for e in entries if tags_lower & set(e.get("tags", []))]
+        total = len(entries)
+        entries = entries[offset:offset + limit]
 
     lines = [f"Memory Store: {total} entries total"]
     if offset > 0 or len(entries) < total:
         lines[0] += f" (showing {offset + 1}-{offset + len(entries)})"
     lines.append("")
 
-    for entry in entries:
+    for idx, entry in enumerate(entries):
         eid = entry["id"]
         summary = entry.get("summary", "")
         entry_tags = ", ".join(entry.get("tags", []))
@@ -319,7 +291,7 @@ def format_index_summary(
 
         current = "\n".join(lines)
         if len(current) > max_chars - 100:
-            remaining = total - entries.index(entry) - 1
+            remaining = len(entries) - idx - 1
             if remaining > 0:
                 lines.append(f"\n  ... and {remaining} more entries (use --offset to paginate)")
             break
@@ -334,14 +306,20 @@ def format_search_results(results: list[dict], max_chars: int = 4000) -> str:
 
     lines = [f"Found {len(results)} matching memories:\n"]
 
-    for r in results:
+    for idx, r in enumerate(results):
         eid = r["id"]
         summary = r.get("summary", "")
         score = r.get("score", 0)
         entry_tags = ", ".join(r.get("tags", []))
         chars = r.get("char_count", 0)
 
-        line = f"  [{score:2d}] {eid}  {summary}"
+        # Format score: float for BM25, int for legacy
+        if isinstance(score, float):
+            score_str = f"{score:5.1f}"
+        else:
+            score_str = f"{score:2d}"
+
+        line = f"  [{score_str}] {eid}  {summary}"
         if entry_tags:
             line += f"  [{entry_tags}]"
         line += f"  ({chars:,} chars)"
@@ -349,7 +327,7 @@ def format_search_results(results: list[dict], max_chars: int = 4000) -> str:
 
         current = "\n".join(lines)
         if len(current) > max_chars - 100:
-            remaining = len(results) - results.index(r) - 1
+            remaining = len(results) - idx - 1
             if remaining > 0:
                 lines.append(f"\n  ... and {remaining} more results")
             break
@@ -536,12 +514,6 @@ def _auto_tags(content: str) -> list[str]:
     candidates.sort(key=lambda x: -x[1])
 
     return [w for w, _ in candidates[:8]]
-
-
-def _tokenize(text: str) -> list[str]:
-    """Tokenize a query string into lowercase keywords."""
-    words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text.lower())
-    return [w for w in words if len(w) > 2 and w not in STOP_WORDS]
 
 
 def _chunk_content(content: str, entry_id: str) -> list[dict]:
