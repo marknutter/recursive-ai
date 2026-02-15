@@ -70,6 +70,8 @@ def _migrate_json_to_sqlite():
 
     migrated = 0
     errors = 0
+
+    # Use a single transaction for all imports (10-100x faster)
     for entry_meta in index:
         entry_id = entry_meta["id"]
         entry_path = os.path.join(ENTRIES_DIR, f"{entry_id}.json")
@@ -78,7 +80,7 @@ def _migrate_json_to_sqlite():
             with open(entry_path, "r") as f:
                 full_entry = json.load(f)
 
-            db.import_entry_from_json(full_entry)
+            db.import_entry_from_json(full_entry, auto_commit=False)
             migrated += 1
         except (OSError, json.JSONDecodeError) as e:
             # Entry file missing or corrupt -- create stub from index metadata
@@ -94,12 +96,16 @@ def _migrate_json_to_sqlite():
                     source_name=entry_meta.get("source_name"),
                     char_count=entry_meta.get("char_count", 0),
                     content="[content unavailable -- original entry file missing]",
+                    auto_commit=False,
                 )
             except sqlite3.IntegrityError:
                 pass  # already migrated
             except Exception as inner_e:
                 print(f"  Error: failed to create stub for {entry_id}: {inner_e}",
                       file=sys.stderr)
+
+    # Commit all imports in one transaction
+    db.commit()
 
     # Rebuild FTS index after bulk import
     db.rebuild_fts_index()
@@ -350,6 +356,9 @@ def grep_memory_content(
         return content
 
     lines = content.splitlines()
+
+    # Normalize GNU grep BRE alternation (\|) to Python regex (|)
+    pattern = pattern.replace(r"\|", "|")
 
     try:
         regex = re.compile(pattern, re.IGNORECASE)

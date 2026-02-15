@@ -121,8 +121,13 @@ def insert_entry(
     char_count: int,
     content: str,
     chunks: list[dict] | None = None,
+    auto_commit: bool = True,
 ) -> None:
-    """Insert a new memory entry. Replaces if entry_id already exists."""
+    """Insert a new memory entry. Replaces if entry_id already exists.
+
+    Args:
+        auto_commit: If False, caller must commit manually. Use False for bulk inserts.
+    """
     conn = _get_conn()
     tags_json = json.dumps(tags)
     chunks_json = json.dumps(chunks) if chunks is not None else None
@@ -133,7 +138,8 @@ def insert_entry(
         (entry_id, summary, tags_json, timestamp, source, source_name,
          char_count, content, chunks_json),
     )
-    conn.commit()
+    if auto_commit:
+        conn.commit()
 
 
 def source_name_exists(source_name: str) -> bool:
@@ -325,11 +331,14 @@ def get_snippets(
 # --- Migration support ---
 
 
-def import_entry_from_json(entry_data: dict) -> None:
+def import_entry_from_json(entry_data: dict, auto_commit: bool = True) -> None:
     """Import a single entry from the old JSON format.
 
     Expects a dict with: id, summary, tags, timestamp, source,
     source_name, char_count, content, and optionally chunks.
+
+    Args:
+        auto_commit: If False, caller must commit manually. Use False for bulk imports.
     """
     insert_entry(
         entry_id=entry_data["id"],
@@ -341,7 +350,14 @@ def import_entry_from_json(entry_data: dict) -> None:
         char_count=entry_data.get("char_count", len(entry_data.get("content", ""))),
         content=entry_data.get("content", ""),
         chunks=entry_data.get("chunks"),
+        auto_commit=auto_commit,
     )
+
+
+def commit() -> None:
+    """Manually commit the current transaction."""
+    conn = _get_conn()
+    conn.commit()
 
 
 def rebuild_fts_index() -> None:
