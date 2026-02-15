@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * RLM PreCompact Hook - Archive conversation to episodic memory
+ * RLM SessionEnd Hook - Archive conversation on session end
  *
- * Saves full conversation transcript to ~/.rlm/memory/ before compaction,
- * enabling cross-session memory and context continuity.
+ * Saves conversation transcript to episodic memory when session ends,
+ * catching sessions that close without compaction.
  */
 
 const { execSync } = require('child_process');
@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 
 function log(msg) {
-  console.error(`[RLM-PreCompact] ${msg}`);
+  console.error(`[RLM-SessionEnd] ${msg}`);
 }
 
 function getProjectRoot() {
@@ -51,12 +51,39 @@ function getSessionFile() {
   return files.length > 0 ? files[0].path : null;
 }
 
+function wasRecentlyArchived(sessionFile) {
+  // Check if this session was archived in the last 60 seconds
+  // (prevents duplicate archiving if both PreCompact and SessionEnd fire)
+  const archiveMarker = sessionFile + '.rlm-archived';
+
+  if (!fs.existsSync(archiveMarker)) {
+    return false;
+  }
+
+  const stat = fs.statSync(archiveMarker);
+  const ageSeconds = (Date.now() - stat.mtime.getTime()) / 1000;
+
+  return ageSeconds < 60;
+}
+
+function markAsArchived(sessionFile) {
+  // Touch a marker file to prevent duplicate archiving
+  const archiveMarker = sessionFile + '.rlm-archived';
+  fs.writeFileSync(archiveMarker, new Date().toISOString());
+}
+
 async function main() {
   try {
     const sessionFile = getSessionFile();
 
     if (!sessionFile) {
       log('No active session file found - skipping archive');
+      process.exit(0);
+    }
+
+    // Skip if recently archived by PreCompact hook
+    if (wasRecentlyArchived(sessionFile)) {
+      log('Session already archived by PreCompact hook - skipping');
       process.exit(0);
     }
 
@@ -70,7 +97,7 @@ async function main() {
       process.exit(0);
     }
 
-    log(`Archiving session to episodic memory...`);
+    log(`Archiving session on end...`);
     log(`Project: ${projectName}`);
     log(`Session: ${path.basename(sessionFile)}`);
 
@@ -104,9 +131,8 @@ async function main() {
       }
     );
 
-    // Mark as archived to prevent duplicate archiving by SessionEnd hook
-    const archiveMarker = sessionFile + '.rlm-archived';
-    require('fs').writeFileSync(archiveMarker, new Date().toISOString());
+    // Mark as archived to prevent duplicate archiving
+    markAsArchived(sessionFile);
 
     log(`✓ Session archived to ~/.rlm/memory/`);
     log(`  Tags: ${tags}`);
@@ -114,7 +140,7 @@ async function main() {
 
   } catch (err) {
     log(`Error: ${err.message}`);
-    // Don't fail compaction if archiving fails
+    // Don't fail session end if archiving fails
     process.exit(0);
   }
 }
