@@ -56,13 +56,22 @@ This does two things:
 In any Claude Code session:
 
 ```
+# Analysis -- query + path
 /rlm "find security vulnerabilities" ./src/
 /rlm "summarize the architecture" ~/projects/my-app/
 /rlm "find all API endpoints and their auth requirements" ./backend/
-/rlm "what are the performance bottlenecks?" ./lib/
+
+# Recall -- query alone (searches persistent memory)
+/rlm "what did we decide about authentication"
+/rlm "what was I working on last session"
+
+# Store -- remember + content
+/rlm remember "The deploy process requires running migrations first" --tags "deploy,ops" --summary "Deploy prerequisites"
 ```
 
-The argument format is `"<query>" <path>`. The query goes in quotes, followed by a file or directory path.
+For **analysis**, the format is `"<query>" <path>` -- query in quotes, followed by a file or directory path.
+For **recall**, just a quoted query with no path.
+For **storage**, the keyword `remember` followed by quoted content (with optional `--tags` and `--summary`).
 
 Claude will then autonomously:
 1. Scan the target for metadata
@@ -70,6 +79,88 @@ Claude will then autonomously:
 3. Decompose the content and dispatch subagents
 4. Iterate if needed (up to 15 iterations)
 5. Synthesize and present findings
+
+## Unified Memory
+
+After the `memory-integrated` branch was merged into `main`, all three capabilities -- analysis, recall, and storage -- are handled by a single `/rlm` command. There are no separate `/recall` or `/remember` commands. Routing is determined by the argument pattern:
+
+| Invocation | Mode | What It Does |
+|---|---|---|
+| `/rlm "query" ./path/` | **Analysis** | Recursive scan-chunk-dispatch analysis of a codebase or file |
+| `/rlm "query"` | **Recall** | Searches persistent memory at `~/.rlm/memory/` and synthesizes an answer |
+| `/rlm remember "content"` | **Store** | Saves content to persistent memory with tags and summary |
+
+### How Recall Works
+
+Recall uses the same architectural principles as codebase analysis (metadata-first, bounded output, subagent delegation) but inverts the starting condition: instead of analyzing a known target path, it must *find* what to inspect across a growing knowledge store.
+
+The retrieval pipeline:
+
+1. **Load learned patterns** -- Before searching, the system loads `~/.rlm/strategies/learned_patterns.md`, a file of retrieval heuristics accumulated from previous recall sessions (e.g., "use vocabulary variants for topical queries").
+2. **Deep keyword search** -- Scans entry content (not just metadata) across the memory index for candidate matches.
+3. **Grep pre-filtering** -- Before dispatching a subagent, runs a regex grep within each candidate entry to confirm keyword presence. Entries with no matches are skipped, keeping subagent count proportional to *relevant* entries rather than *matching* entries.
+4. **Graduated subagent dispatch** -- Sends the top 4-5 entries to subagents first. If the query is answered, stop. If gaps remain, dispatch more.
+5. **Synthesis** -- Combines subagent findings into a structured answer with attributed quotes and source entry IDs.
+6. **Performance logging and learning** -- Logs metrics to `~/.rlm/strategies/performance.jsonl`. If the agent discovers a reusable retrieval heuristic, it writes it to `learned_patterns.md` for future sessions.
+
+### How Storage Works
+
+Store a piece of knowledge for later recall:
+
+```
+/rlm remember "The auth module uses JWT tokens with 24h expiry" --tags "auth,jwt,security" --summary "Auth token configuration"
+/rlm remember --file ./notes/architecture-decisions.md --tags "architecture,decisions" --summary "ADR log"
+```
+
+Tags and summaries are used for search indexing. If omitted, the system generates them automatically.
+
+### Memory Setup
+
+Memory requires no additional setup beyond installation. The memory store is created automatically at `~/.rlm/memory/` on first use. Key paths:
+
+| Path | Purpose |
+|---|---|
+| `~/.rlm/memory/` | Persistent memory entries (JSON + content files) |
+| `~/.rlm/strategies/learned_patterns.md` | Self-improving retrieval heuristics |
+| `~/.rlm/strategies/performance.jsonl` | Performance log from recall sessions |
+
+To populate memory with existing chat data, use the ingestion scripts:
+
+```bash
+# Ingest Foobat CSV archives or Oqodo Firebase exports
+uv run python scripts/ingest_chat_data.py --source foobat --path /path/to/archive.csv
+uv run python scripts/ingest_chat_data.py --source oqodo --path /path/to/firebase-export.json
+```
+
+### Memory CLI Commands
+
+These commands can also be used standalone outside of `/rlm`:
+
+```bash
+# Search memory (--deep scans content, not just summaries)
+uv run rlm recall "query" --deep [--tags tag1,tag2] [--max 20]
+
+# Store a memory
+uv run rlm remember "content" --tags "tag1,tag2" --summary "description"
+uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "description"
+
+# Browse memory
+uv run rlm memory-list [--tags tag1,tag2] [--offset 0] [--limit 50]
+uv run rlm memory-tags
+
+# Grep within a specific entry (pre-filter before subagent dispatch)
+uv run rlm memory-extract <entry_id> --grep "pattern" --context 3
+
+# Extract full entry content
+uv run rlm memory-extract <entry_id>
+
+# View/manage retrieval strategies
+uv run rlm strategy show
+uv run rlm strategy log
+
+# Delete a memory
+uv run rlm forget <entry_id>
+```
 
 ## Architecture
 
@@ -117,22 +208,18 @@ rlm/
                 principle from the paper.
 
 skill/
-  SKILL.md      The skill prompt that encodes the full RLM algorithm.
-                Loaded into Claude Code when the user invokes /rlm. Contains
-                the 5-step orchestration loop, decision heuristics, subagent
-                dispatch patterns, and iteration limits.
-
-  RECALL_SKILL.md   The /recall skill prompt for memory retrieval. Implements
-                    a 6-step flow: load learned patterns, search, grep
-                    pre-filter, graduated subagent dispatch, synthesize,
-                    log performance and learn.
-
-  REMEMBER_SKILL.md The /remember skill prompt for storing memories.
+  SKILL.md      The unified skill prompt. Loaded into Claude Code when the
+                user invokes /rlm. Routes by argument pattern to one of
+                three modes: analysis (query + path), recall (query alone),
+                or store (remember + content). Contains the 5-step analysis
+                loop, the 6-step recall flow (learned patterns, search,
+                grep pre-filter, graduated dispatch, synthesize, learn),
+                and the storage flow.
 ```
 
 ### Adaptive Retrieval
 
-The `/recall` skill uses a self-improving retrieval loop:
+The recall mode of `/rlm` uses a self-improving retrieval loop:
 
 1. **Learned patterns** -- Before each recall, load `~/.rlm/strategies/learned_patterns.md` -- heuristics discovered in previous sessions (e.g., "use vocabulary variants for topical queries").
 2. **Grep pre-filtering** -- Before dispatching subagents, grep within each candidate entry to confirm keyword presence. Eliminates false positives from index-level matching.
