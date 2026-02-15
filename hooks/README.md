@@ -15,7 +15,7 @@ Add **both hooks** to your `~/.claude/hooks/hooks.json` file for complete covera
         "hooks": [
           {
             "type": "command",
-            "command": "node \"/ABSOLUTE/PATH/TO/recursive-ai/hooks/pre-compact-rlm.js\""
+            "command": "python3 \"/ABSOLUTE/PATH/TO/recursive-ai/hooks/pre-compact-rlm.py\""
           }
         ],
         "description": "Archive conversation before compaction (manual or auto)"
@@ -27,7 +27,7 @@ Add **both hooks** to your `~/.claude/hooks/hooks.json` file for complete covera
         "hooks": [
           {
             "type": "command",
-            "command": "node \"/ABSOLUTE/PATH/TO/recursive-ai/hooks/session-end-rlm.js\""
+            "command": "python3 \"/ABSOLUTE/PATH/TO/recursive-ai/hooks/session-end-rlm.py\""
           }
         ],
         "description": "Archive conversation on session end (catches non-compacted sessions)"
@@ -46,8 +46,8 @@ Add **both hooks** to your `~/.claude/hooks/hooks.json` file for complete covera
 mkdir -p ~/.claude/hooks
 
 # Symlink both RLM hooks
-ln -s "$(pwd)/hooks/pre-compact-rlm.js" ~/.claude/hooks/rlm-precompact.js
-ln -s "$(pwd)/hooks/session-end-rlm.js" ~/.claude/hooks/rlm-sessionend.js
+ln -s "$(pwd)/hooks/pre-compact-rlm.py" ~/.claude/hooks/rlm-precompact.py
+ln -s "$(pwd)/hooks/session-end-rlm.py" ~/.claude/hooks/rlm-sessionend.py
 ```
 
 Then reference in `~/.claude/hooks/hooks.json`:
@@ -61,7 +61,7 @@ Then reference in `~/.claude/hooks/hooks.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$HOME/.claude/hooks/rlm-precompact.js\""
+            "command": "python3 \"$HOME/.claude/hooks/rlm-precompact.py\""
           }
         ],
         "description": "Archive before compaction"
@@ -73,7 +73,7 @@ Then reference in `~/.claude/hooks/hooks.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$HOME/.claude/hooks/rlm-sessionend.js\""
+            "command": "python3 \"$HOME/.claude/hooks/rlm-sessionend.py\""
           }
         ],
         "description": "Archive on session end"
@@ -85,14 +85,14 @@ Then reference in `~/.claude/hooks/hooks.json`:
 
 ## What It Does
 
-### PreCompact Hook (pre-compact-rlm.js)
+### PreCompact Hook (pre-compact-rlm.py)
 Fires **before every compaction** (manual or automatic):
 1. Exports full conversation transcript
 2. Stores in `~/.rlm/memory/` using SQLite + FTS5
 3. Tags with: `conversation`, `session`, project name, date
 4. Marks session as archived (prevents duplicate archiving)
 
-### SessionEnd Hook (session-end-rlm.js)
+### SessionEnd Hook (session-end-rlm.py)
 Fires **when session ends without compaction**:
 1. Checks if session was already archived (within last 60 seconds)
 2. If not, exports and stores the conversation
@@ -125,6 +125,17 @@ After installing, test both hooks:
 ```
 
 ### Verify Archives
+
+**Primary Interface (in Claude Code):**
+```
+# Search archived conversations
+/rlm "topic you discussed"
+
+# Search with specific tags
+/rlm "topic" --tags conversation,project-name
+```
+
+**CLI Interface (for debugging/scripting):**
 ```bash
 # List all conversation memories
 uv run rlm memory-list --tags conversation
