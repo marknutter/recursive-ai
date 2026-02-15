@@ -136,6 +136,15 @@ def insert_entry(
     conn.commit()
 
 
+def source_name_exists(source_name: str) -> bool:
+    """Check if an entry with this source_name already exists."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM entries WHERE source_name = ? LIMIT 1", (source_name,)
+    ).fetchone()
+    return row is not None
+
+
 def get_entry(entry_id: str) -> dict | None:
     """Load a full memory entry by ID. Returns None if not found."""
     conn = _get_conn()

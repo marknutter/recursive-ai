@@ -19,6 +19,7 @@ from pathlib import Path
 # Add project root to path so we can import rlm
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from rlm import memory
+from rlm import db
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 FOOBAT_POSTS = DATA_DIR / "FOOBAT POSTS.csv"
@@ -177,35 +178,50 @@ def build_oqodo_conversations(
     users: dict, threads: dict, posts: dict, cliqs: dict
 ) -> list[dict]:
     """Build conversation groups from Oqodo threads."""
-    # Map thread_id -> list of posts
-    thread_posts = defaultdict(list)
+    # Build thread_id -> post_id mapping from threads.rels.posts
+    # (Most posts lack threads_parent_id; the thread->post refs are authoritative)
+    thread_post_ids = defaultdict(set)
+    for tid, tdata in threads.items():
+        refs = tdata.get("rels", {}).get("posts", {})
+        for pid in refs:
+            thread_post_ids[tid].add(pid)
+
+    # Also pick up posts that have threads_parent_id (early data has this)
     for pid, post in posts.items():
         tid = post.get("threads_parent_id", "")
-        if not tid:
-            continue
+        if tid and tid in threads:
+            thread_post_ids[tid].add(pid)
 
-        content = strip_html(post.get("content", ""))
-        if not content:
-            continue
+    # Resolve post refs into actual post data
+    thread_posts = defaultdict(list)
+    for tid, pids in thread_post_ids.items():
+        for pid in pids:
+            post = posts.get(pid)
+            if not post:
+                continue
 
-        updated_at = post.get("updated_at", 0)
-        # Firebase timestamps in milliseconds
-        if isinstance(updated_at, (int, float)) and updated_at > 1e12:
-            updated_at = updated_at / 1000
-        try:
-            dt = datetime.fromtimestamp(updated_at) if updated_at > 0 else None
-        except (OSError, ValueError):
-            dt = None
+            content = strip_html(post.get("content", ""))
+            if not content:
+                continue
 
-        user_id = str(post.get("user_id", ""))
-        user = users.get(user_id, {})
-        display_name = user.get("display", f"user_{user_id}")
+            updated_at = post.get("updated_at", 0)
+            # Firebase timestamps in milliseconds
+            if isinstance(updated_at, (int, float)) and updated_at > 1e12:
+                updated_at = updated_at / 1000
+            try:
+                dt = datetime.fromtimestamp(updated_at) if updated_at > 0 else None
+            except (OSError, ValueError):
+                dt = None
 
-        thread_posts[tid].append({
-            "content": content,
-            "datetime": dt,
-            "user_name": display_name,
-        })
+            user_id = str(post.get("user_id", ""))
+            user = users.get(user_id, {})
+            display_name = user.get("display", f"user_{user_id}")
+
+            thread_posts[tid].append({
+                "content": content,
+                "datetime": dt,
+                "user_name": display_name,
+            })
 
     # Build conversation entries
     conversations = []
@@ -343,7 +359,15 @@ def ingest_oqodo(dry_run: bool = False):
     print(f"  {len(conversations)} after filtering (>= 2 posts)")
 
     if dry_run:
-        print("\n[DRY RUN] Would ingest:")
+        from collections import Counter
+        year_dist = Counter()
+        for c in conversations:
+            y = c["start_date"].strftime("%Y") if c["start_date"] else "unknown"
+            year_dist[y] += 1
+        print(f"\n[DRY RUN] Conversations by year:")
+        for y in sorted(year_dist):
+            print(f"  {y}: {year_dist[y]}")
+        print(f"\nSample entries:")
         for c in conversations[:5]:
             print(f"  \"{c['title']}\": {c['post_count']} posts, "
                   f"{len(c['participants'])} participants, "
@@ -355,7 +379,15 @@ def ingest_oqodo(dry_run: bool = False):
     print("\nIngesting into memory...")
     memory.init_memory_store()
     ingested = 0
+    skipped = 0
     for c in conversations:
+        source_name = f"oqodo-thread-{c['thread_id'][:12]}"
+
+        # Skip if already ingested (incremental)
+        if db.source_name_exists(source_name):
+            skipped += 1
+            continue
+
         participant_names = ", ".join(c["participants"][:5])
         if len(c["participants"]) > 5:
             participant_names += f" +{len(c['participants']) - 5} more"
@@ -380,14 +412,14 @@ def ingest_oqodo(dry_run: bool = False):
             content=c["content"],
             tags=tags,
             source="oqodo-firebase",
-            source_name=f"oqodo-thread-{c['thread_id'][:12]}",
+            source_name=source_name,
             summary=summary,
         )
         ingested += 1
         if ingested % 50 == 0:
             print(f"  {ingested}/{len(conversations)} ingested...")
 
-    print(f"  Done: {ingested} Oqodo entries ingested")
+    print(f"  Done: {ingested} new entries ingested, {skipped} skipped (already exist)")
 
 
 # --- Map Oqodo emails to Foobat names ---
