@@ -181,3 +181,228 @@ Looking back at what FINDINGS.md identified, there are three categories: quality
 - **Pruning** — Remove or merge patterns that contradict each other or become stale.
 
 **Priority**: SQLite FTS5 first, because it solves two problems at once (semantic matching via BM25 ranking + scale) with zero new dependencies. Then strategy scaling to build on the most novel aspect. The LLM-generated search expansion could be done quickly as a skill prompt change in parallel with either.
+
+## Current JSON Index vs. SQLite FTS5
+
+### How the JSON Index Works Today
+
+The index is a single flat JSON array at `~/.rlm/memory/index.json` — currently 135KB, 337 entries. Each entry is a lightweight metadata record (~200 bytes):
+
+```json
+{
+  "id": "m_8d20ca061147",
+  "summary": "Dict ordering guarantee since Python 3.7",
+  "tags": ["python", "data-structures", "trivia", "language-spec"],
+  "timestamp": 1771013822.803,
+  "source": "text",
+  "source_name": null,
+  "char_count": 253
+}
+```
+
+Actual content lives in separate per-entry JSON files under `~/.rlm/memory/entries/{id}.json`. The index intentionally omits content — it's the "metadata-first" layer the orchestrator scans without loading raw data. Writes are atomic via tempfile + `os.replace()`.
+
+**Search** (`search_index()`) loads the entire JSON array into memory, tokenizes the query (strips stop words, lowercases, filters words ≤2 chars), then scores every entry with a hand-rolled point system:
+
+| Match Type | Points | Mechanism |
+|---|---|---|
+| Keyword exact match in summary word list | +3 | `kw in summary.split()` |
+| Keyword substring in summary | +1 | `kw in summary` |
+| Keyword exact match on a tag | +2 | `kw in entry_tags` |
+| Keyword partial match on a tag | +1 | `kw in tag or tag in kw` (bidirectional substring) |
+| Keyword found in content (deep mode) | +1 | `kw in content.lower()` (loads full entry JSON from disk) |
+
+Results sort by `(-score, -timestamp)` and are capped at `max_results` (default 20).
+
+### What the JSON Index Cannot Do
+
+**No real ranking model.** The point system is hand-tuned intuition, not a proper relevance algorithm. There's no term frequency weighting (a keyword appearing 50 times in content scores the same +1 as appearing once), no inverse document frequency (common terms across many entries aren't down-weighted), and no document length normalization (a 250-char entry and an 86K-char entry are scored identically).
+
+**No stemming.** The tokenizer does exact lowercase matching only. "running" won't match "run" or "ran." "vulnerabilities" won't match "vulnerability." The only mitigation is the skill prompt telling the orchestrator to manually try vocabulary variants — which works but pushes linguistic intelligence to the prompt layer instead of the search layer.
+
+**No phrase matching.** The query "Iraq war" tokenizes into `["iraq", "war"]` and scores each independently. An entry mentioning "Iraq" in one paragraph and "war" in another scores identically to one containing "Iraq war" as a phrase.
+
+**Linear scan on every search.** `load_index()` deserializes the entire 135KB file and iterates over all 337 entries. Deep search is worse — it opens and parses every matching entry's individual JSON file from disk. At 337 entries this takes under a second. At 10K entries the JSON parse alone becomes noticeable; at 100K, deep search reads thousands of files sequentially.
+
+**Full index rewrite on every mutation.** `add_memory()` and `delete_memory()` load the entire index, modify in memory, and write it all back. At 337 entries the file is 135KB — fine. At 10K entries it would be multiple megabytes rewritten per store operation.
+
+### What FTS5 Provides
+
+SQLite FTS5 (Full-Text Search 5) is a virtual table extension purpose-built for text search. It's available in Python's stdlib via `sqlite3`, preserving the zero-dependency principle.
+
+**Schema** — Instead of a flat JSON array plus separate files, one SQLite database:
+
+```sql
+CREATE TABLE entries (
+    id TEXT PRIMARY KEY,
+    summary TEXT,
+    tags TEXT,
+    timestamp REAL,
+    source TEXT,
+    source_name TEXT,
+    char_count INTEGER,
+    content TEXT
+);
+
+CREATE VIRTUAL TABLE entries_fts USING fts5(
+    summary,
+    tags,
+    content,
+    content='entries',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+```
+
+Mutations become single `INSERT`/`DELETE` statements instead of load-modify-rewrite-entire-file.
+
+**BM25 ranking** — FTS5 has BM25 (Best Matching 25) built in, replacing the hand-tuned point system:
+
+```sql
+SELECT id, summary, tags, bm25(entries_fts, 3.0, 2.0, 1.0) AS rank
+FROM entries_fts
+WHERE entries_fts MATCH 'iraq war'
+ORDER BY rank
+LIMIT 20;
+```
+
+BM25 addresses three gaps in the current scoring:
+
+1. **Term frequency saturation** — The first occurrence of a keyword matters most; additional occurrences have diminishing returns. An entry mentioning "iraq" 50 times doesn't score 50x higher than one mentioning it twice.
+2. **Inverse document frequency** — Words appearing in many entries are automatically down-weighted relative to rare, distinctive terms. If "war" appears in 100 entries but "iraq" in 3, the "iraq" match contributes more.
+3. **Document length normalization** — Short, focused entries aren't penalized relative to long entries that contain keywords incidentally.
+
+Column weights (`3.0, 2.0, 1.0` above) preserve the current intuition that summary matches matter more than content matches, but with a mathematically grounded ranking underneath.
+
+**Porter stemming** — The `tokenize='porter unicode61'` declaration applies the Porter stemming algorithm at index time:
+
+| Query | Also matches |
+|---|---|
+| `running` | `run`, `runs`, `ran` |
+| `vulnerabilities` | `vulnerability`, `vulnerable` |
+| `authentication` | `authenticate`, `authenticated` |
+| `searching` | `search`, `searches`, `searched` |
+
+This directly addresses the biggest quality gap. Currently the skill prompt compensates by telling the LLM to "also try auth, login, password" — but that's fragile and only covers synonyms the prompt author anticipated. Stemming handles morphological variants automatically and universally. The `unicode61` component handles accent normalization for non-ASCII text.
+
+**Additional query capabilities** — FTS5 provides features the current system has no equivalent for:
+
+- **Phrase matching**: `'"iraq war"'` matches the phrase, not just both words independently
+- **Prefix matching**: `'auth*'` matches auth, authenticate, authentication, authorization
+- **Boolean operators**: `'iraq AND (war OR invasion) NOT oil'`
+- **Column-scoped search**: `'tags:security'` restricts to the tags column
+- **Proximity search**: `'NEAR(iraq war, 5)'` — terms within 5 tokens of each other
+- **Snippet extraction**: `snippet(entries_fts, 2, '>>>', '<<<', '...', 30)` returns highlighted excerpts around matches, which could partially replace the grep pre-filtering step
+
+### Performance Comparison
+
+| Operation | Current (JSON) | With FTS5 |
+|---|---|---|
+| Search (index only) | O(n) — parse full JSON, iterate all entries | O(log n) — inverted index lookup |
+| Search (deep/content) | O(n) — open + parse each entry file from disk | O(log n) — content already in the FTS index |
+| Insert | O(n) — rewrite entire index.json | O(log n) — single row insert + FTS index update |
+| Delete | O(n) — rewrite entire index.json | O(1) — single row delete + FTS index update |
+| Disk format | 135KB JSON + 337 separate entry files | Single `.db` file |
+| At 10K entries | Multi-MB JSON parse, deep search reads thousands of files | Same O(log n) lookups |
+| At 100K entries | Untenable | Still sub-second |
+
+### What Wouldn't Change
+
+The **grep pre-filtering** step would retain a role, though reduced. FTS5 identifies *which entries* match and can produce snippets showing *where*, but the current grep step serves a specific architectural purpose: confirming keyword presence in meaningful context before spending a subagent call. For simple checks, FTS5 snippets could replace grep; for complex regex patterns (`"iraq|WMD|bush|invasion"`), explicit grep still adds value.
+
+The **subagent dispatch pattern** is unaffected — FTS5 improves candidate identification, not content evaluation. Graduated dispatch, synthesis, and learning remain the same.
+
+The **entry file format** could optionally stay as-is (individual JSON files for manual inspection) with FTS5 indexing content separately, or content could move entirely into SQLite for transactional consistency. Either approach works.
+
+## Why the Roadmap Is Keyword → FTS5 → Vector (and Whether Vector Is Necessary)
+
+The improvement roadmap follows a specific logic: each tier solves a distinct class of retrieval failure, and the cost/complexity escalates at each step. The question is where the curve of diminishing returns flattens out — whether you actually need to reach the vector tier at all.
+
+### Tier 1: Keyword Search (Current System)
+
+Keyword search is the right starting point because it has the best ratio of implementation simplicity to retrieval power for a system where the downstream consumer is an LLM.
+
+The key insight: keyword search doesn't need to be *great* at ranking because there's a subagent evaluation layer after it. It only needs to avoid false negatives — getting the relevant entries into the candidate set at all. Ranking precision is nice-to-have because it reduces subagent waste, but the system still produces correct answers as long as the relevant entries appear *somewhere* in the result list. This is fundamentally different from a user-facing search engine where ranking *is* the product.
+
+**What it solves**: Exact keyword recall. If the stored content uses the same words as the query, keyword search finds it reliably.
+
+**Where it fails**: Vocabulary mismatch. "security vulnerabilities" won't find "authentication bypass." The query and the content describe the same concept with different words. The current system mitigates this via the skill prompt ("also try auth, login, password"), which effectively offloads synonym expansion to the LLM orchestrator. This works but it's brittle — it depends on the prompt author anticipating the right synonyms and on the LLM reliably executing the expansion.
+
+**Why it was right to start here**: At 337 entries, keyword search is fast, debuggable, and zero-dependency. It let us prove the architecture (metadata-first, subagent evaluation, graduated dispatch, self-improving strategies) without coupling it to a search backend. The architectural innovations — which are the novel part of this project — are independent of the search layer. Starting with the simplest possible search isolated the interesting variables.
+
+### Tier 2: SQLite FTS5 (Next Step)
+
+FTS5 addresses a specific class of failure that keyword search can't handle: **morphological variants**. Porter stemming means "running" finds "run," "vulnerabilities" finds "vulnerability," and "authenticate" finds "authentication." This is not semantic understanding — it's rule-based suffix stripping. But it eliminates a large fraction of vocabulary mismatch in practice because many "missed" queries fail on inflectional variants, not on genuine synonyms.
+
+**What it adds beyond keywords**:
+- **Stemming** closes the morphological gap (the single biggest source of missed results after exact-keyword queries)
+- **BM25** gives principled ranking instead of hand-tuned points (reduces subagent waste by putting better candidates first)
+- **Phrase and proximity matching** let the search layer express structural relationships between terms (currently impossible)
+- **Sub-linear lookup** means the system scales without architectural change
+
+**What it doesn't solve**: True semantic matching. "Security vulnerabilities" still won't find "authentication bypass" because there's no morphological relationship between those words — the connection is purely conceptual. Similarly, "what was everyone's opinion on the Iraq war" won't find an entry that only uses "Bush's foreign policy" without mentioning Iraq explicitly.
+
+**Why it's the right next step**: It solves two problems simultaneously (the quality gap from missing morphological variants and the scaling gap from linear JSON scanning) with zero new dependencies. The cost is modest — `sqlite3` is stdlib, the migration is a one-time index rebuild, and the API changes are contained within `memory.py`. The `search_index()` function becomes a SQL query; the rest of the codebase doesn't change.
+
+### Tier 3: Vector Embeddings (The Question)
+
+Vector retrieval would solve the true semantic gap: it maps text to points in a high-dimensional space where conceptually similar phrases end up near each other, regardless of vocabulary. "Security vulnerabilities" and "authentication bypass" would have nearby vectors because embedding models learn that relationship from training data.
+
+**What it would add**: The ability to find conceptually related content when there's no word overlap at all between the query and the stored content. This is the one class of failure that neither keywords nor stemming can address.
+
+**What it costs**:
+- An external dependency (an embedding model — either an API like OpenAI/Cohere/Voyage, or a local model like `sentence-transformers`)
+- API costs per store and per query (or GPU/CPU cost for local inference)
+- A vector index (FAISS, Annoy, pgvector, Chroma, etc.) or at minimum numpy for brute-force cosine similarity
+- Index rebuilding when the embedding model changes (embeddings from different models aren't comparable)
+- Loss of debuggability (you can inspect why a keyword search found something; inspecting why a vector search ranked something requires understanding high-dimensional geometry)
+
+**The critical question: is the semantic gap actually the bottleneck?**
+
+For this system, there's a strong argument that it isn't. Here's why:
+
+1. **LLM-generated query expansion can bridge most semantic gaps without vectors.** Before searching, have the orchestrator generate keyword variants: "security vulnerabilities" → also search for "auth bypass, injection, XSS, CSRF, exploit, CVE." This is essentially what the skill prompt already does manually, but automated and query-specific. The LLM has a better vocabulary for this than any embedding model because it can reason about domain-specific terminology. Cost: one extra LLM call per recall session. No new dependencies.
+
+2. **The self-improving strategies already learn domain-specific bridges.** After the Iraq War recall test, the system learned to "use vocabulary variants for topical queries" and specifically that Iraq War content might use "Bush" or "WMD." These patterns accumulate over time. In practice, the system develops its own query expansion heuristics for recurring topics.
+
+3. **FTS5 prefix matching covers partial semantic overlap.** `'auth*'` catches authenticate, authentication, authorization, and authority. Combined with LLM query expansion, this handles a surprisingly large fraction of vocabulary mismatch without any vector infrastructure.
+
+4. **The subagent evaluation layer is the real semantic engine.** Once a candidate entry reaches a subagent, the LLM reads it with full language understanding. The failure mode isn't "we retrieved it but didn't understand it" — it's "we never retrieved it at all." The retrieval layer only needs to avoid false negatives, and the combination of FTS5 stemming + LLM query expansion + learned patterns makes false negatives from vocabulary mismatch increasingly unlikely over time.
+
+### Is There a Non-Vector Approach That Closes the Remaining Gap?
+
+Yes, and it's arguably more aligned with this project's architecture:
+
+**LLM-as-query-expander (Tier 2.5)**
+
+Insert a lightweight LLM call between the user's query and the FTS5 search:
+
+```
+User query: "what security issues have come up?"
+    ↓
+LLM expansion: ["security", "vulnerability", "auth", "bypass",
+                "injection", "XSS", "CSRF", "exploit", "CVE",
+                "permission", "access control", "secret", "leak"]
+    ↓
+FTS5 search with expanded terms
+```
+
+This is conceptually similar to what vector embeddings do (mapping a query to a broader semantic neighborhood) but executed as natural language reasoning rather than geometric proximity. Advantages over vectors:
+
+- **Zero infrastructure** — uses the same LLM already available via Claude Code
+- **Domain-aware** — the LLM can generate domain-specific expansions (e.g., knowing that "Iraq war" should expand to "Bush, WMD, Saddam, invasion, occupation, Rumsfeld")
+- **Debuggable** — you can see exactly which expansion terms were generated and which ones matched
+- **Self-improving** — expansion strategies can be captured in the learned patterns file, so the system gets better at expanding over time
+- **Cost-proportional** — one cheap LLM call per recall session, not per-entry embedding computation
+
+The residual gap this doesn't cover: content where there's no vocabulary bridge at all between the query and the stored text, and where the LLM's own knowledge doesn't suggest one. In practice, this is rare — if a human can articulate why two pieces of text are related, an LLM can generate bridging keywords for them. The cases where vector similarity finds connections that no keyword expansion could are typically statistical co-occurrence patterns from the embedding training data, not connections a reasoner would articulate.
+
+### Where This Leaves the Roadmap
+
+The honest assessment is that for this system's architecture — where retrieval is a candidate filter, not the final answer — the path is:
+
+1. **FTS5 + LLM query expansion** — Solves ~90% of the retrieval quality gap with zero external dependencies. This should be the next implementation step.
+2. **Self-improving expansion strategies** — As the learned patterns accumulate domain-specific query expansion heuristics, the remaining gap shrinks further through use.
+3. **Vector retrieval** — Becomes relevant only if, after FTS5 + LLM expansion + learned patterns, there are still systematic false negatives that can't be addressed by smarter query expansion. At that point, the right architecture is hybrid: vector retrieval for candidate identification, FTS5 for filtering and phrase matching, subagent evaluation for deep analysis.
+
+The vector tier may never be necessary. The system's architecture is specifically designed so that retrieval quality can be compensated by evaluation depth — if you retrieve too many candidates, graduated dispatch and grep pre-filtering manage the cost; if you retrieve too few, the LLM can try variant queries. Vector embeddings are the industry default for semantic search, but this project's two-tier retrieval architecture (cheap search + expensive evaluation) changes the cost calculus. The evaluation tier can compensate for retrieval imprecision in ways that a single-pass RAG system cannot.
