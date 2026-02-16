@@ -220,12 +220,42 @@ def cmd_remember(args):
 
 
 def cmd_recall(args):
-    """Search memory and return matching entries."""
+    """Search memory and return matching entries.
+
+    For large matches (>10KB), the output includes size annotations
+    to guide RLM-powered recall via the /rlm skill.
+    """
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
     results = memory.search_index(
         args.query, tags=tags, max_results=args.max, deep=args.deep,
+        include_size=True,  # Annotate with size categories
     )
-    _print(memory.format_search_results(results))
+
+    # Check if any results need RLM chunking
+    large_results = [r for r in results if r.get("size_category") in ("large", "huge")]
+
+    output = memory.format_search_results(results)
+
+    # Add guidance for large memories
+    if large_results:
+        guidance = [
+            "\n" + "="*60,
+            f"Note: {len(large_results)} of {len(results)} results are large (>10KB)",
+            "",
+            "For context-efficient retrieval of large memories:",
+            "1. Use grep pre-filtering: rlm memory-extract <id> --grep \"keyword\"",
+            "2. Or use RLM chunking for full analysis (via /rlm skill)",
+            "",
+            "Large results:"
+        ]
+        for r in large_results:
+            size = r.get("char_count", 0)
+            category = r.get("size_category", "unknown")
+            guidance.append(f"  {r['id']}: {size:,} chars ({category})")
+        guidance.append("="*60)
+        output += "\n".join(guidance)
+
+    _print(output)
 
 
 def cmd_memory_extract(args):

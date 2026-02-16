@@ -229,6 +229,7 @@ def search_index(
     tags: list[str] | None = None,
     max_results: int = 20,
     deep: bool = False,
+    include_size: bool = False,
 ) -> list[dict]:
     """Search memory using FTS5 full-text search with BM25 ranking.
 
@@ -238,9 +239,31 @@ def search_index(
     The `deep` parameter is accepted for backward compatibility but
     is no longer needed: FTS5 always searches across summary, tags,
     and content simultaneously.
+
+    Args:
+        query: Search query string
+        tags: Optional list of tags to filter by
+        max_results: Maximum number of results to return
+        deep: Backward compatibility, no effect
+        include_size: If True, annotate results with size category for RLM chunking
     """
     _ensure_db()
-    return db.search_fts(query, tags=tags, max_results=max_results)
+    results = db.search_fts(query, tags=tags, max_results=max_results)
+
+    if include_size:
+        for r in results:
+            char_count = r.get("char_count", 0)
+            # Annotate with size category for RLM-powered recall
+            if char_count > 50000:
+                r["size_category"] = "huge"  # Definitely needs RLM chunking
+            elif char_count > 10000:
+                r["size_category"] = "large"  # Should use RLM chunking
+            elif char_count > 2000:
+                r["size_category"] = "medium"  # Optional chunking
+            else:
+                r["size_category"] = "small"  # Direct extraction fine
+
+    return results
 
 
 def delete_memory(entry_id: str) -> dict:
