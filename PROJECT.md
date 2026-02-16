@@ -100,65 +100,163 @@ Automatic persistent memory that survives context limits and session boundaries:
 
 ---
 
-# Current Focus: Phase 2 - Episodic Memory
+# Completed Work
 
-## Immediate Next Steps
+## Phase 1: Core RLM ✅
+- Scan, chunk, extract, session management
+- Multiple chunking strategies (functions, files, headings, semantic, lines)
+- Subagent dispatch pattern
+- Skill prompt with clear modes
 
-### 1. Hook-Based Auto-Archiving ✅ COMPLETE
-**Goal:** Automatically save context before compaction
+## Phase 2: Episodic Memory ✅
+- SQLite + FTS5 backend with batch transaction optimization (21x speedup)
+- Memory storage API (`/rlm remember`) and recall API (`/rlm recall`)
+- Hook-based auto-archiving (PreCompact + SessionEnd hooks)
+- RLM-powered recall with size detection + chunking guidance
+- Self-improving retrieval via learned patterns
+- Tested end-to-end: hooks archive conversations, recall retrieves them
 
-**Tasks:**
-- [x] Create pre-compaction hook in Claude Code
-- [x] Extract full conversation transcript on trigger
-- [x] Store in `~/.rlm/memory/` with metadata (timestamp, project, session_id)
-- [x] Add tags: `conversation`, `session`, project name, date
-- [ ] Test: verify context survives compaction (needs manual testing)
-
-**Files to modify:**
-- Hook configuration (Claude Code integration)
-- `examples/export_session.py` (already exists, enhance it)
-- `rlm/memory.py` (add conversation-specific ingestion)
-
-### 2. RLM-Powered Recall ✅ COMPLETE
-**Goal:** Use chunking when retrieving large memories
-
-**Tasks:**
-- [x] Detect when recalled memory is too large (>10KB)
-- [x] Apply RLM chunking to large memory matches
-- [x] Document workflow in skill prompt
-- [x] Return summary + targeted extracts instead of full content
-- [ ] Test with real large conversation memories (needs manual testing)
-
-**Files to modify:**
-- `rlm/cli.py` (`cmd_recall` function)
-- `skill/SKILL.md` (document recall mode behavior)
-- `rlm/memory.py` (add chunk-aware retrieval)
-
-### 3. Conversation Schema Enhancement
-**Goal:** Structure for episodic memory storage
-
-**Tasks:**
-- [ ] Add conversation-specific fields to database schema
-- [ ] Track: session_id, project_path, participants, turn_count
-- [ ] Index by temporal proximity (recent conversations)
-- [ ] Query API: "conversations from last week about X"
-
-**Files to modify:**
-- `rlm/db.py` (schema updates)
-- `rlm/cli.py` (conversation-aware queries)
+## Skill Prompt ✅
+- Enforced subagent-only content access
+- Exact CLI usage examples
+- File-group chunk dispatch pattern
 
 ---
 
-# Backlog TODOs
+# TODO: Next Phase
 
-## Skill Prompt Improvements
+## 1. Automatic Memory Utilization (Auto-Recall)
 
-- [x] **Enforce subagent-only content access.** Tighten SKILL.md to make it explicit that extracted content must go *into subagent prompts*, never into the main orchestrator context. The current wording says this but Claude still loads extracts into its own context. Needs stronger guardrails -- e.g., "Do NOT call `rlm extract` and read the output yourself. Instead, construct the extract command and embed its output directly in the Task subagent prompt."
+**The problem:** Users must explicitly invoke `/rlm "query"` to access past conversations. The system has the memory but the agent doesn't know to use it unless asked.
 
-- [x] **Add exact CLI usage examples to the skill prompt.** Claude guessed wrong flags (`--chunk` instead of `--chunk-id`, `--session` on extract). Add a quick-reference block in SKILL.md showing the exact syntax for each command, especially extract variants: `--lines START:END`, `--chunk-id ID --manifest PATH`, `--grep PATTERN`.
+**The goal:** Make AI agents automatically consult their memory when it would be helpful, without the user having to remember to invoke `/rlm`.
 
-- [x] **Add file-group chunk dispatch pattern.** When using `files_directory`/`files_language`/`files_balanced`, the chunks contain file lists rather than line ranges. The skill prompt needs an explicit pattern for this: iterate the file list in each chunk, extract each file's content, and include all of them in a single subagent prompt per chunk group.
+### Possible approaches:
+- [ ] **Session-start hook**: On every new session, automatically recall recent work on the current project and inject a brief summary into the agent's context. Could use a `SessionStart` hook or `CLAUDE.md` auto-load pattern.
+- [ ] **CLAUDE.md memory injection**: Generate a per-project `~/.claude/projects/{project}/memory/RECENT.md` file that gets auto-loaded. Update it at session end with a summary of what was worked on.
+- [ ] **Prompt-level instruction**: Add instructions to `CLAUDE.md` telling the agent to check memory before starting complex work ("Before implementing, check if this was discussed previously: `/rlm 'relevant query'`").
+- [ ] **MCP server approach**: Build an MCP server that exposes RLM memory as a tool. MCP tools are available to the agent automatically — it could call `rlm_recall` as naturally as it calls `Read` or `Bash`. This would make memory feel native rather than requiring a slash command.
+- [ ] **Investigate Claude Code's `SessionStart` hook**: Does Claude Code support running hooks at session start? If so, we could auto-inject recent context.
+- [ ] **Explore other coding assistants' extension points**: What hooks/plugins do Codex, Gemini Code Assist, Cursor, Windsurf offer? Map the integration surface for each.
 
+### Open questions:
+- What's the right amount of context to auto-inject? Too much wastes tokens, too little misses important context.
+- Should auto-recall be project-scoped (only memories tagged with current project) or global?
+- How do we avoid the agent wasting time on memory lookups when the task is simple?
 
+## 2. RLM Analysis Engine Improvements
 
-\
+**The goal:** Reach and exceed the efficiency gains reported in the paper. Make RLM the best-in-class recursive analysis tool.
+
+### Performance benchmarks:
+- [ ] **Establish formal benchmarks**: Define metrics (context leverage ratio, recall accuracy, subagent efficiency, wall-clock time) and create reproducible test suites.
+- [ ] **Compare against paper results**: The paper reports 100x context leverage. Our best is 5,600x on CPython (total codebase) and 63x on Juice Shop (relevant content). Understand where we're outperforming and where we're falling short.
+- [ ] **Benchmark against competing tools**: Compare RLM analysis vs. Aider's repo map, Cursor's codebase indexing, OpenClaw's hybrid search on identical tasks.
+
+### Chunking strategy improvements:
+- [ ] **Adaptive chunk sizing**: Instead of fixed chunk sizes, dynamically size chunks based on content density and query relevance signals.
+- [ ] **Cross-file dependency awareness**: When analyzing function X, automatically include its imports, callers, and type definitions in the same chunk.
+- [ ] **AST-aware chunking for more languages**: Expand proper AST parsing beyond Python to JS/TS, Go, Rust (currently regex-based).
+
+### Subagent dispatch improvements:
+- [ ] **Smarter pre-filtering**: Use grep/keyword analysis before dispatching subagents to skip irrelevant chunks (already done for recall, extend to analysis).
+- [ ] **Confidence-based early termination**: If first wave of subagents all agree on a finding with high confidence, skip remaining waves.
+- [ ] **Result deduplication**: Detect when multiple subagents report the same finding from different chunks.
+
+### Iteration loop improvements:
+- [ ] **Drill-down heuristics**: Better automatic decisions about when to re-chunk at finer granularity vs. when to accept results.
+- [ ] **Cross-reference resolution**: When a subagent says "this function calls X.authenticate()", automatically queue X for analysis.
+
+## 3. Intelligent Transcript Compression
+
+**The problem:** Raw session JSONL files are ~2.5MB. The current export script reduces this to ~107KB (24x compression) by extracting only user/assistant messages and summarizing tool calls. But 107KB is still a lot of content for a single conversation, much of which is boilerplate, repeated context, or verbose tool output that isn't useful for long-term memory.
+
+**The goal:** Reduce stored conversation size by another 5-10x while preserving the information that matters for future recall. Like human memory: remember the decisions, insights, and key exchanges — not every keystroke.
+
+### What's currently saved (and what could be trimmed):
+The export script (`examples/export_session.py`) already:
+- ✅ Strips tool results (verbose command output)
+- ✅ Summarizes tool calls to one-liners (`[Tool: Bash] git status`)
+- ✅ Deduplicates streaming assistant messages
+- ✅ Keeps only user and assistant messages
+
+What it could additionally do:
+- [ ] **Strip system reminders and hook output**: The JSONL contains `system-reminder` blocks, hook success messages, linter notifications. These are noise for memory purposes.
+- [ ] **Collapse repetitive exchanges**: If the user says "yes" and the assistant says "OK, doing it now" followed by 10 tool calls then a summary, compress to just the summary.
+- [ ] **Extract decisions and findings**: Pull out the "we decided X because Y" moments and tag them specially.
+- [ ] **Remove boilerplate assistant responses**: "Let me check...", "Great question!", "Here's what I found:" — these are conversational filler.
+- [ ] **Summarize code blocks**: Instead of storing full code output, store "wrote 45-line function `authenticate()` in `auth.py`" with a reference to the commit hash.
+
+### Tiered storage approach:
+- [ ] **Tier 1: Summary** (~2-5KB) — Key decisions, findings, topics discussed, files modified. Auto-generated at session end.
+- [ ] **Tier 2: Conversation** (~20-50KB) — The human-readable back-and-forth, compressed. What we store today but smarter.
+- [ ] **Tier 3: Full transcript** (~100KB+) — Everything including tool calls. Kept for forensic recall but not loaded by default.
+- [ ] Store all three tiers, search Tier 1 first, drill into Tier 2/3 only when needed.
+
+### Counterpoints to aggressive compression (things to be careful about):
+- Tool call sequences sometimes contain important context ("I tried X, it failed, so I did Y instead"). The failure path is often more informative than the success.
+- Error messages and debugging exchanges are high-value for future recall ("how did we fix that bug last time?").
+- The full transcript is already only loaded by subagents (not the main context), so storage cost matters more than retrieval cost.
+
+## 4. SQLite Memory Store Improvements
+
+**The goal:** Make the storage layer more robust, efficient, and capable as the memory store grows beyond hundreds to thousands+ entries.
+
+### Schema improvements:
+- [ ] **Conversation-specific metadata**: Add fields for session_id, project_path, turn_count, duration. Enable queries like "conversations from last week" or "longest sessions about project X".
+- [ ] **Temporal indexing**: Index by date so temporal queries ("what was I doing last Tuesday") are fast.
+- [ ] **Relationship tracking**: Link related memories (e.g., "this conversation continued from memory X" or "this decision supersedes memory Y").
+
+### Search improvements:
+- [ ] **Tag filtering in SQL**: Currently tags may be filtered in Python post-query. Move tag filtering into the SQL query itself for efficiency at scale.
+- [ ] **Ranked tag search**: When searching by tag, weight exact matches higher than partial matches.
+- [ ] **Configurable BM25 weights**: Allow tuning BM25 parameters (k1, b) for different content types (conversations vs. documents vs. code).
+
+### Storage efficiency:
+- [ ] **Content deduplication**: If the same conversation is archived twice (e.g., PreCompact + SessionEnd race condition edge case), detect and skip.
+- [ ] **Incremental archiving**: Instead of storing the full conversation every time compaction happens, store only the delta since the last archive.
+- [ ] **Compression**: Consider zlib compression for stored content. 107KB conversations would compress to ~15-20KB.
+- [ ] **Retention policies**: Auto-summarize and compress old memories (>30 days) while keeping recent ones in full fidelity.
+
+### Reliability:
+- [ ] **WAL mode**: Enable SQLite WAL (Write-Ahead Logging) for better concurrent read/write performance.
+- [ ] **Backup strategy**: Periodic backup of the memory database. Simple rsync or SQLite `.backup` command.
+- [ ] **Integrity checks**: Periodic PRAGMA integrity_check on the database.
+
+## 5. Cross-Platform Compatibility (Library-ification)
+
+**The goal:** Make RLM + episodic memory a standalone library that any AI coding assistant, chatbot, or agent framework can use. Not just Claude Code.
+
+### Phase 1: Abstract the integration layer
+- [ ] **Define a provider-agnostic hook interface**: Currently hooks are Claude Code-specific (`PreCompact`, `SessionEnd`). Define abstract events: `on_context_overflow`, `on_session_end`, `on_session_start`, `on_user_query`.
+- [ ] **Abstract the session transcript format**: Currently parses Claude Code's JSONL format. Define a generic transcript format and write adapters for each platform.
+- [ ] **Abstract the skill/prompt interface**: Currently uses SKILL.md for Claude Code skills. Define a generic "instruction set" that maps to each platform's prompt injection mechanism.
+
+### Phase 2: Platform adapters
+- [ ] **OpenAI Codex**: Research Codex's extension points, context management, and tool calling interface.
+- [ ] **Gemini Code Assist**: Research Google's coding assistant hooks and integration APIs.
+- [ ] **Cursor**: Research Cursor's `.cursor/` configuration, custom instructions, and MCP support.
+- [ ] **Windsurf**: Research Windsurf's extension model.
+- [ ] **Aider**: Research Aider's plugin system and repo map integration.
+- [ ] **Generic chatbot integration**: Define a minimal API (`remember()`, `recall()`, `analyze()`) that any chatbot framework could call.
+
+### Phase 3: Package and distribute
+- [ ] **PyPI package**: `pip install rlm` or `uv pip install rlm` for the core library.
+- [ ] **CLI tool**: `rlm` as a standalone command-line tool (already exists, just needs packaging).
+- [ ] **MCP server**: Expose RLM as an MCP server so any MCP-compatible client gets memory for free.
+- [ ] **Documentation**: Getting started guides per platform, API reference, architecture docs.
+- [ ] **Example integrations**: Working examples for each supported platform.
+
+## 6. Additional Ideas
+
+### Memory quality and intelligence:
+- [ ] **Memory importance scoring**: Not all conversations are equally valuable. Score memories by information density, decision count, topic novelty. Prioritize high-value memories in search results.
+- [ ] **Automatic tagging**: Use LLM to auto-generate semantic tags at archive time instead of just project name + date. "authentication", "architecture-decision", "debugging", "performance-optimization".
+- [ ] **Memory consolidation**: Like sleep in humans — periodically review related memories and create consolidated "knowledge entries" that synthesize patterns across multiple conversations.
+- [ ] **Forgetting curve**: Reduce the search weight of memories that have never been recalled. Frequently recalled memories get boosted. Natural Ebbinghaus-style decay.
+
+### Developer experience:
+- [ ] **Memory dashboard**: Simple web UI or TUI to browse, search, and manage the memory store.
+- [ ] **Memory statistics**: `rlm stats` command showing entry count, total size, tag distribution, recall frequency, storage growth over time.
+- [ ] **Export/import**: Export full memory store for backup or migration between machines.
+- [ ] **Privacy controls**: Ability to mark certain memories as "do not recall" or auto-redact sensitive content (API keys, passwords) before storage.
