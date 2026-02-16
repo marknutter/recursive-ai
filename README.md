@@ -94,14 +94,30 @@ After the `memory-integrated` branch was merged into `main`, all three capabilit
 
 Recall uses the same architectural principles as codebase analysis (metadata-first, bounded output, subagent delegation) but inverts the starting condition: instead of analyzing a known target path, it must *find* what to inspect across a growing knowledge store.
 
-The retrieval pipeline:
+**The key architectural difference from standard RAG:**
+
+| Aspect | Standard RAG (e.g., OpenClaw) | RLM Recall |
+|--------|-------------------------------|------------|
+| **Semantic understanding** | At index time (via embeddings) | At query time (via LLM evaluation) |
+| **Search method** | Vector similarity or hybrid (vector + keyword weighted scoring) | Two-tier: Keyword pre-filter → LLM evaluation |
+| **Retrieval quality** | Limited by embedding model quality | Scales with LLM capability |
+| **Dependencies** | Embedding API or local model + vector DB extension | Pure SQLite FTS5 + LLM |
+| **Complexity** | High (embedding pipeline, vector storage, hybrid scoring) | Minimal (keyword index only) |
+| **Cost model** | Embedding API calls per document at index time | LLM tokens per query at retrieval time |
+| **Offline capability** | Yes (with local embeddings) | Yes (FTS5 works offline, LLM evaluation requires API) |
+
+Standard RAG embeds everything upfront and searches by vector similarity. RLM uses **cheap keyword search to find candidates**, then applies **expensive LLM intelligence only where it matters** — evaluating the actual relevance of each candidate entry. This inverts the cost structure: index time is free, query time is smart.
+
+**The retrieval pipeline:**
 
 1. **Load learned patterns** -- Before searching, the system loads `~/.rlm/strategies/learned_patterns.md`, a file of retrieval heuristics accumulated from previous recall sessions (e.g., "use vocabulary variants for topical queries").
-2. **Deep keyword search** -- Scans entry content (not just metadata) across the memory index for candidate matches.
-3. **Grep pre-filtering** -- Before dispatching a subagent, runs a regex grep within each candidate entry to confirm keyword presence. Entries with no matches are skipped, keeping subagent count proportional to *relevant* entries rather than *matching* entries.
-4. **Graduated subagent dispatch** -- Sends the top 4-5 entries to subagents first. If the query is answered, stop. If gaps remain, dispatch more.
+2. **Deep keyword search** -- Scans entry content (not just metadata) across the FTS5 index for candidate matches using BM25 ranking.
+3. **Grep pre-filtering** -- Before dispatching a subagent, runs a regex grep within each candidate entry to confirm keyword presence and locate relevant sections. Entries with no matches are skipped, keeping subagent count proportional to *relevant* entries rather than *matching* entries. This eliminates false positives from index-level scoring.
+4. **Graduated subagent dispatch** -- Sends the top 4-5 entries to subagents first. If the query is answered, stop. If gaps remain, dispatch more. Each subagent extracts the full entry content and evaluates it for relevance, returning attributed quotes and summaries.
 5. **Synthesis** -- Combines subagent findings into a structured answer with attributed quotes and source entry IDs.
-6. **Performance logging and learning** -- Logs metrics to `~/.rlm/strategies/performance.jsonl`. If the agent discovers a reusable retrieval heuristic, it writes it to `learned_patterns.md` for future sessions.
+6. **Performance logging and learning** -- Logs metrics to `~/.rlm/strategies/performance.jsonl` (query, search terms, entries found/relevant, subagents dispatched, notes). If the agent discovers a reusable retrieval heuristic during the session, it writes it to `learned_patterns.md` for future sessions to load and apply.
+
+This creates a **self-improving retrieval loop** where the "model" being trained is the skill prompt's heuristics, the "training signal" is the agent's self-assessment, and the "weights" are the patterns file. No fine-tuning, no RAG pipeline, no embedding models — just an LLM learning to search better through prompt-level online learning.
 
 ### How Storage Works
 
@@ -123,6 +139,76 @@ Memory requires no additional setup beyond installation. The memory store is cre
 | `~/.rlm/memory/` | Persistent memory entries (JSON + content files) |
 | `~/.rlm/strategies/learned_patterns.md` | Self-improving retrieval heuristics |
 | `~/.rlm/strategies/performance.jsonl` | Performance log from recall sessions |
+
+#### Automatic Conversation Archiving
+
+RLM includes Claude Code hooks that automatically archive your conversations to memory, creating a searchable knowledge base of all your work. This enables true cross-session continuity — you can pick up where you left off days or weeks later by simply asking what you were working on.
+
+**Installation:**
+
+```bash
+# Create hooks directory
+mkdir -p ~/.claude/hooks
+
+# Symlink the RLM hooks
+ln -s "$(pwd)/hooks/pre-compact-rlm.py" ~/.claude/hooks/rlm-precompact.py
+ln -s "$(pwd)/hooks/session-end-rlm.py" ~/.claude/hooks/rlm-sessionend.py
+
+# Create hooks configuration
+cat > ~/.claude/hooks/hooks.json <<'EOF'
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/rlm-precompact.py\""
+          }
+        ],
+        "description": "Archive before compaction"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/rlm-sessionend.py\""
+          }
+        ],
+        "description": "Archive on session end"
+      }
+    ]
+  }
+}
+EOF
+```
+
+**What the hooks do:**
+
+- **PreCompact hook** fires before every compaction (manual or automatic), exporting the full conversation transcript to `~/.rlm/memory/`
+- **SessionEnd hook** fires when a session ends without compaction, ensuring zero data loss
+- Conversations are tagged with `conversation`, `session`, project name, and date for easy retrieval
+- Marker files prevent duplicate archiving (60-second deduplication window)
+- Together, these hooks guarantee **100% conversation capture**
+
+**Usage after installation:**
+
+```
+# Retrieve previous work
+/rlm "what was I working on last session"
+/rlm "what did we decide about authentication"
+/rlm "openclaw voyage ai embeddings"
+
+# The hooks archive automatically — nothing else needed
+```
+
+See [hooks/README.md](hooks/README.md) for detailed installation instructions and troubleshooting.
+
+#### Manual Memory Population
 
 To populate memory with existing chat data, use the ingestion scripts:
 
