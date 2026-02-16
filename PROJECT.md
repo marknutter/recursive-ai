@@ -125,17 +125,34 @@ Automatic persistent memory that survives context limits and session boundaries:
 
 # TODO: Next Phase
 
-## 1. Automatic Memory Utilization (Auto-Recall)
+**Recommended implementation sequence:**
+1. **Auto-Recall (MCP server)** - Changes the experience, smallest lift, biggest payoff
+2. **Semantic Tagging** - Improves recall quality immediately, small scope
+3. **Transcript Compression** - Improves what auto-recall retrieves
+4-7. **Ongoing improvements** - Engine, SQLite, cross-platform, advanced features
+
+---
+
+## 1. Automatic Memory Utilization (Auto-Recall) 🎯 START HERE
 
 **The problem:** Users must explicitly invoke `/rlm "query"` to access past conversations. The system has the memory but the agent doesn't know to use it unless asked.
 
 **The goal:** Make AI agents automatically consult their memory when it would be helpful, without the user having to remember to invoke `/rlm`.
 
-### Possible approaches:
-- [ ] **Session-start hook**: On every new session, automatically recall recent work on the current project and inject a brief summary into the agent's context. Could use a `SessionStart` hook or `CLAUDE.md` auto-load pattern.
+**Why start here:** This changes the *experience* of the tool from a feature you remember to use into a capability that feels native. MCP server approach is the smallest lift with biggest payoff, and immediately gets you partway to cross-platform compatibility (#6).
+
+### Recommended approach: MCP Server (priority)
+- [ ] **Build MCP server exposing RLM tools**: Wrap `rlm recall`, `rlm remember`, and `rlm scan/chunk/analyze` as MCP tools.
+- [ ] **Test with Claude Code**: Verify the agent calls `rlm_recall` on its own when relevant.
+- [ ] **Test with Cursor**: Cursor supports MCP — test cross-platform compatibility immediately.
+- [ ] **Document MCP setup**: Add installation and configuration instructions to README.
+
+**Why MCP first:** MCP tools feel native to the agent (like `Read` or `Bash`). The agent decides when to recall rather than requiring a slash command. Works across any MCP-compatible client (Claude Code, Cursor, etc.), immediately addressing cross-platform (#6).
+
+### Alternative approaches (secondary):
+- [ ] **Session-start hook**: On every new session, automatically recall recent work on the current project and inject a brief summary into the agent's context. Blunt instrument vs. MCP's surgical approach.
 - [ ] **CLAUDE.md memory injection**: Generate a per-project `~/.claude/projects/{project}/memory/RECENT.md` file that gets auto-loaded. Update it at session end with a summary of what was worked on.
 - [ ] **Prompt-level instruction**: Add instructions to `CLAUDE.md` telling the agent to check memory before starting complex work ("Before implementing, check if this was discussed previously: `/rlm 'relevant query'`").
-- [ ] **MCP server approach**: Build an MCP server that exposes RLM memory as a tool. MCP tools are available to the agent automatically — it could call `rlm_recall` as naturally as it calls `Read` or `Bash`. This would make memory feel native rather than requiring a slash command.
 - [ ] **Investigate Claude Code's `SessionStart` hook**: Does Claude Code support running hooks at session start? If so, we could auto-inject recent context.
 - [ ] **Explore other coding assistants' extension points**: What hooks/plugins do Codex, Gemini Code Assist, Cursor, Windsurf offer? Map the integration surface for each.
 
@@ -144,9 +161,31 @@ Automatic persistent memory that survives context limits and session boundaries:
 - Should auto-recall be project-scoped (only memories tagged with current project) or global?
 - How do we avoid the agent wasting time on memory lookups when the task is simple?
 
-## 2. RLM Analysis Engine Improvements
+## 2. Semantic Tagging 🎯 HIGH IMPACT, SMALL SCOPE
 
-**The goal:** Reach and exceed the efficiency gains reported in the paper. Make RLM the best-in-class recursive analysis tool.
+**The problem:** Conversations are currently tagged only with generic metadata: `conversation,session,recursive-ai,2026-02-15`. This makes recall less effective because searches can't target specific topics.
+
+**The goal:** Auto-generate semantic tags at archive time using the LLM. Tags like `authentication`, `architecture-decision`, `debugging`, `sqlite`, `hooks`, `embeddings` make recall dramatically better without any other changes.
+
+**Why do this second:** Small scope (just modify the archiving hooks), high impact (immediately improves recall quality), and directly benefits auto-recall (#1).
+
+### Implementation:
+- [ ] **Add LLM-based tag generation to hooks**: Before calling `rlm remember`, send the conversation transcript to the LLM with a prompt asking for 5-10 semantic tags.
+- [ ] **Tag extraction prompt**: "Extract 5-10 semantic tags from this conversation. Focus on: technical topics discussed, decisions made, problems solved, technologies mentioned. Return as comma-separated lowercase tags."
+- [ ] **Combine with existing tags**: Keep `conversation`, `session`, project name, date — add semantic tags on top.
+- [ ] **Test recall improvement**: Compare recall quality before/after on the same queries.
+
+### Example tag transformation:
+**Before:** `conversation,session,recursive-ai,2026-02-15`
+**After:** `conversation,session,recursive-ai,2026-02-15,episodic-memory,hooks,sqlite,openclaw,embeddings,architecture-decision,voyage-ai`
+
+## 3. Intelligent Transcript Compression
+
+**The problem:** Raw session JSONL files are ~2.5MB. The current export script reduces this to ~107KB (24x compression) by extracting only user/assistant messages and summarizing tool calls. But 107KB is still a lot of content for a single conversation, much of which is boilerplate, repeated context, or verbose tool output that isn't useful for long-term memory.
+
+**The goal:** Reduce stored conversation size by another 5-10x while preserving the information that matters for future recall. Like human memory: remember the decisions, insights, and key exchanges — not every keystroke.
+
+**Why do this third:** Directly improves what auto-recall (#1) retrieves, and semantic tagging (#2) makes it easier to identify what to compress vs. preserve.
 
 ### Performance benchmarks:
 - [ ] **Establish formal benchmarks**: Define metrics (context leverage ratio, recall accuracy, subagent efficiency, wall-clock time) and create reproducible test suites.
@@ -167,20 +206,25 @@ Automatic persistent memory that survives context limits and session boundaries:
 - [ ] **Drill-down heuristics**: Better automatic decisions about when to re-chunk at finer granularity vs. when to accept results.
 - [ ] **Cross-reference resolution**: When a subagent says "this function calls X.authenticate()", automatically queue X for analysis.
 
-## 3. Intelligent Transcript Compression
+## 5. SQLite Memory Store Improvements
+
+**The goal:** Make the storage layer more robust, efficient, and capable as the memory store grows beyond hundreds to thousands+ entries.
+
+**Why do this fifth:** These are incremental improvements that matter at scale. Not urgent for early adoption.
 
 **The problem:** Raw session JSONL files are ~2.5MB. The current export script reduces this to ~107KB (24x compression) by extracting only user/assistant messages and summarizing tool calls. But 107KB is still a lot of content for a single conversation, much of which is boilerplate, repeated context, or verbose tool output that isn't useful for long-term memory.
 
 **The goal:** Reduce stored conversation size by another 5-10x while preserving the information that matters for future recall. Like human memory: remember the decisions, insights, and key exchanges — not every keystroke.
 
-### What's currently saved (and what could be trimmed):
+### Current state (24x compression already):
 The export script (`examples/export_session.py`) already:
 - ✅ Strips tool results (verbose command output)
 - ✅ Summarizes tool calls to one-liners (`[Tool: Bash] git status`)
 - ✅ Deduplicates streaming assistant messages
 - ✅ Keeps only user and assistant messages
+- Result: ~2.5MB raw JSONL → ~107KB exported transcript
 
-What it could additionally do:
+### Additional compression opportunities:
 - [ ] **Strip system reminders and hook output**: The JSONL contains `system-reminder` blocks, hook success messages, linter notifications. These are noise for memory purposes.
 - [ ] **Collapse repetitive exchanges**: If the user says "yes" and the assistant says "OK, doing it now" followed by 10 tool calls then a summary, compress to just the summary.
 - [ ] **Extract decisions and findings**: Pull out the "we decided X because Y" moments and tag them specially.
@@ -198,9 +242,11 @@ What it could additionally do:
 - Error messages and debugging exchanges are high-value for future recall ("how did we fix that bug last time?").
 - The full transcript is already only loaded by subagents (not the main context), so storage cost matters more than retrieval cost.
 
-## 4. SQLite Memory Store Improvements
+## 4. RLM Analysis Engine Improvements
 
-**The goal:** Make the storage layer more robust, efficient, and capable as the memory store grows beyond hundreds to thousands+ entries.
+**The goal:** Reach and exceed the efficiency gains reported in the paper. Make RLM the best-in-class recursive analysis tool.
+
+**Why do this fourth:** These are ongoing improvements to weave in as you encounter pain points. Not urgent compared to auto-recall, tagging, and compression.
 
 ### Schema improvements:
 - [ ] **Conversation-specific metadata**: Add fields for session_id, project_path, turn_count, duration. Enable queries like "conversations from last week" or "longest sessions about project X".
@@ -223,9 +269,11 @@ What it could additionally do:
 - [ ] **Backup strategy**: Periodic backup of the memory database. Simple rsync or SQLite `.backup` command.
 - [ ] **Integrity checks**: Periodic PRAGMA integrity_check on the database.
 
-## 5. Cross-Platform Compatibility (Library-ification)
+## 6. Cross-Platform Compatibility (Library-ification)
 
 **The goal:** Make RLM + episodic memory a standalone library that any AI coding assistant, chatbot, or agent framework can use. Not just Claude Code.
+
+**Why do this sixth:** The MCP server (#1) is the first step toward this. Once MCP works across multiple clients, abstracting the rest of the integration layer becomes the natural next move.
 
 ### Phase 1: Abstract the integration layer
 - [ ] **Define a provider-agnostic hook interface**: Currently hooks are Claude Code-specific (`PreCompact`, `SessionEnd`). Define abstract events: `on_context_overflow`, `on_session_end`, `on_session_start`, `on_user_query`.
@@ -243,11 +291,15 @@ What it could additionally do:
 ### Phase 3: Package and distribute
 - [ ] **PyPI package**: `pip install rlm` or `uv pip install rlm` for the core library.
 - [ ] **CLI tool**: `rlm` as a standalone command-line tool (already exists, just needs packaging).
-- [ ] **MCP server**: Expose RLM as an MCP server so any MCP-compatible client gets memory for free.
+- [ ] **MCP server**: Expose RLM as an MCP server so any MCP-compatible client gets memory for free. (Already covered in #1)
 - [ ] **Documentation**: Getting started guides per platform, API reference, architecture docs.
 - [ ] **Example integrations**: Working examples for each supported platform.
 
-## 6. Additional Ideas
+## 7. Advanced Memory Intelligence
+
+**The goal:** Make the memory system smarter over time — importance scoring, consolidation, forgetting curves, better UX.
+
+**Why do this last:** These are polish features that make a good system great. Tackle after the core experience (#1-3) and scale improvements (#4-6) are solid.
 
 ### Memory quality and intelligence:
 - [ ] **Memory importance scoring**: Not all conversations are equally valuable. Score memories by information density, decision count, topic novelty. Prioritize high-value memories in search results.
