@@ -39,13 +39,13 @@ def get_project_name() -> str:
 
 def get_session_file() -> Path | None:
     """Find the most recent .jsonl session file."""
-    sessions_dir = Path.home() / ".claude" / "sessions"
+    projects_dir = Path.home() / ".claude" / "projects"
 
-    if not sessions_dir.exists():
+    if not projects_dir.exists():
         return None
 
-    # Find most recent .jsonl file
-    session_files = list(sessions_dir.glob("*.jsonl"))
+    # Find most recent .jsonl file across all projects
+    session_files = list(projects_dir.glob("**/*.jsonl"))
     if not session_files:
         return None
 
