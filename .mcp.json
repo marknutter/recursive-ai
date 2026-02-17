@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rlm": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "python", "mcp/server.py"]
+    }
+  }
+}
