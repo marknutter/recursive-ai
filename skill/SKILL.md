@@ -45,7 +45,7 @@ uv run rlm result <session_id> --all
 uv run rlm finalize <session_id> --answer "<text>"
 ```
 
-**All commands must be prefixed with:** `cd /Users/marknutter/Kode/recursive-ai &&`
+**All commands must be prefixed with:** `cd __RLM_ROOT__ &&`
 
 ## Step 0: Parse Arguments and Route
 
@@ -67,7 +67,7 @@ The user invoked `/rlm <args>`. Parse the arguments to determine the mode:
 Parse the quoted query and the path from the args. Then initialize:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm init "<query>" "<target_path>"
+cd __RLM_ROOT__ && uv run rlm init "<query>" "<target_path>"
 ```
 
 Save the session_id from the output. You'll use it throughout.
@@ -75,7 +75,7 @@ Save the session_id from the output. You'll use it throughout.
 ## Step 1: Scan -- Get Metadata Only
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm scan "<target_path>"
+cd __RLM_ROOT__ && uv run rlm scan "<target_path>"
 ```
 
 Read the metadata output carefully. Note:
@@ -90,7 +90,7 @@ Read the metadata output carefully. Note:
 
 First check recommendations:
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm recommend "<target_path>"
+cd __RLM_ROOT__ && uv run rlm recommend "<target_path>"
 ```
 
 **Strategy selection heuristics:**
@@ -104,7 +104,7 @@ Think about what the query needs. Security analysis needs function-level detail.
 
 Then chunk:
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm chunk "<target_path>" --strategy <chosen_strategy> --session <session_id>
+cd __RLM_ROOT__ && uv run rlm chunk "<target_path>" --strategy <chosen_strategy> --session <session_id>
 ```
 
 ## Step 3: Dispatch to Subagents
@@ -126,7 +126,7 @@ Analyze code for the following query: <query>
 
 First, extract the content by running this command:
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm extract <source_file> --lines <start_line>:<end_line>
+cd __RLM_ROOT__ && uv run rlm extract <source_file> --lines <start_line>:<end_line>
 ```
 
 This is from file: <source_file> (lines <start_line>-<end_line>)
@@ -154,10 +154,10 @@ This chunk covers the "<group_name>" group with <file_count> files.
 Extract and analyze each file by running these commands:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm extract <file_1> --lines 1:<lines_1>
+cd __RLM_ROOT__ && uv run rlm extract <file_1> --lines 1:<lines_1>
 ```
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm extract <file_2> --lines 1:<lines_2>
+cd __RLM_ROOT__ && uv run rlm extract <file_2> --lines 1:<lines_2>
 ```
 (repeat for each file in the group)
 
@@ -176,7 +176,7 @@ For file-group chunks, you'll need the line counts from the scan metadata to kno
 
 Store each subagent's results (do NOT read the raw findings in detail -- just store them):
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm result <session_id> --key "chunk_<chunk_id>" --value "<subagent_findings>"
+cd __RLM_ROOT__ && uv run rlm result <session_id> --key "chunk_<chunk_id>" --value "<subagent_findings>"
 ```
 
 **Dispatch rules:**
@@ -188,7 +188,7 @@ cd /Users/marknutter/Kode/recursive-ai && uv run rlm result <session_id> --key "
 After each wave of subagents completes, evaluate:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm result <session_id> --all
+cd __RLM_ROOT__ && uv run rlm result <session_id> --all
 ```
 
 **Decision heuristics:**
@@ -210,7 +210,7 @@ cd /Users/marknutter/Kode/recursive-ai && uv run rlm result <session_id> --all
 
 **For each decision, log it:**
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm result <session_id> --key "iteration_<N>_decision" --value "<what you decided and why>"
+cd __RLM_ROOT__ && uv run rlm result <session_id> --key "iteration_<N>_decision" --value "<what you decided and why>"
 ```
 
 ## Step 5: Synthesize Final Answer
@@ -226,7 +226,7 @@ When you have enough information (or hit the iteration limit):
    - Recommendations (if applicable)
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm finalize <session_id>
+cd __RLM_ROOT__ && uv run rlm finalize <session_id>
 ```
 
 Present the final answer directly to the user.
@@ -244,7 +244,7 @@ Present the final answer directly to the user.
 Before starting a new analysis (after Step 0, before Step 1), check if you have prior knowledge about this target:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "<keywords from query and target path>" --deep
+cd __RLM_ROOT__ && uv run rlm recall "<keywords from query and target path>" --deep
 ```
 
 If relevant memories exist, dispatch a subagent to extract and summarize them. Use prior findings to focus on areas not previously analyzed or check if previously found issues persist.
@@ -254,7 +254,7 @@ If relevant memories exist, dispatch a subagent to extract and summarize them. U
 After Step 5 (synthesize), store key findings as a memory:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember "<synthesized findings summary>" --tags "<target,query-type,key-topics>" --summary "<what was analyzed and key results>"
+cd __RLM_ROOT__ && uv run rlm remember "<synthesized findings summary>" --tags "<target,query-type,key-topics>" --summary "<what was analyzed and key results>"
 ```
 
 Always provide explicit `--tags` and `--summary`. Include target identifier, analysis type, and key topics.
@@ -295,7 +295,7 @@ uv run rlm forget <entry_id>
 Before starting, check for accumulated retrieval strategies from previous sessions:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm strategy show
+cd __RLM_ROOT__ && uv run rlm strategy show
 ```
 
 If patterns exist, incorporate them into your approach. These are heuristics discovered through past recall operations — they should influence your search terms, dispatch strategy, and evaluation focus.
@@ -305,7 +305,7 @@ If patterns exist, incorporate them into your approach. These are heuristics dis
 Run a deep search. **Always use `--deep`** — it scans entry content, not just summaries/tags:
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "search query" --deep
+cd __RLM_ROOT__ && uv run rlm recall "search query" --deep
 ```
 
 **Adaptive search strategy:** Consider whether the query might use different vocabulary in the stored content. If so, run multiple searches with variant terms. For example:
@@ -324,7 +324,7 @@ cd /Users/marknutter/Kode/recursive-ai && uv run rlm recall "search query" --dee
 
 For each search result, run:
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id> --grep "keyword" --context 3
+cd __RLM_ROOT__ && uv run rlm memory-extract <entry_id> --grep "keyword" --context 3
 ```
 
 **What grep tells you:**
@@ -392,13 +392,13 @@ Pre-filter grep showed these relevant sections:
 
 Extract the full content for deeper context:
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id>
+cd __RLM_ROOT__ && uv run rlm memory-extract <entry_id>
 ```
 
 If the entry is large (>10K chars), focus your reading on the sections identified by grep.
 If the entry has chunks, extract specific chunks:
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm memory-extract <entry_id> --chunk-id <chunk_id>
+cd __RLM_ROOT__ && uv run rlm memory-extract <entry_id> --chunk-id <chunk_id>
 ```
 
 Return:
@@ -430,7 +430,7 @@ After subagents return (or after RLM analysis of large memories):
 **After every recall session**, log what happened and assess whether you discovered a reusable pattern.
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm strategy perf \
+cd __RLM_ROOT__ && uv run rlm strategy perf \
   --query "the user's original query" \
   --search-terms "term1,term2,term3" \
   --entries-found <total from search> \
@@ -477,8 +477,8 @@ Parse the arguments for:
 - **--summary "..."**: Short description (always provide)
 
 ```bash
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember "content" --tags "tag1,tag2" --summary "short description"
-cd /Users/marknutter/Kode/recursive-ai && uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "short description"
+cd __RLM_ROOT__ && uv run rlm remember "content" --tags "tag1,tag2" --summary "short description"
+cd __RLM_ROOT__ && uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "short description"
 ```
 
 If the user provides content without explicit tags/summary, generate good ones:

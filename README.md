@@ -43,8 +43,8 @@ No API keys needed -- everything runs on your existing Claude Code subscription.
 ## Installation
 
 ```bash
-git clone <repo-url> ~/Kode/recursive-ai
-cd ~/Kode/recursive-ai
+git clone <repo-url>
+cd recursive-ai
 bash install.sh
 ```
 

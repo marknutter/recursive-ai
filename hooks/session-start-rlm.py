@@ -41,23 +41,11 @@ def get_project_name() -> str:
 
 
 def find_rlm_project() -> Path | None:
-    """Find the recursive-ai project root."""
-    # Check if we're in it
-    project_root = get_project_root()
-    if (project_root / "rlm" / "cli.py").exists():
-        return project_root
-
-    # Check common locations
-    candidates = [
-        Path.home() / "Kode" / "recursive-ai",
-        Path.home() / "Code" / "recursive-ai",
-        Path.home() / "Projects" / "recursive-ai",
-        Path.home() / "recursive-ai",
-    ]
-    for candidate in candidates:
-        if (candidate / "rlm" / "cli.py").exists():
-            return candidate
-
+    """Find the RLM project root by resolving this file's symlink."""
+    # This file is symlinked from ~/.claude/hooks/ → {rlm_root}/hooks/
+    rlm_root = Path(__file__).resolve().parent.parent
+    if (rlm_root / "rlm" / "cli.py").exists():
+        return rlm_root
     return None
 
 

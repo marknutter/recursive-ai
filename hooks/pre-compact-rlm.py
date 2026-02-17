@@ -11,8 +11,9 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# Absolute path to the RLM project — hooks run from any directory
-RLM_PROJECT = Path.home() / "Kode" / "recursive-ai"
+# Resolve symlink to find the RLM project root dynamically.
+# This file is symlinked from ~/.claude/hooks/ → {rlm_root}/hooks/
+RLM_PROJECT = Path(__file__).resolve().parent.parent
 
 
 def log(msg: str):

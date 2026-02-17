@@ -98,7 +98,7 @@ Automatic persistent memory that survives context limits and session boundaries:
 - [ ] Source path tracking (re-extract on demand)
 
 ## Phase 5: Polish & Distribution 📋 (Planned)
-- [ ] Remove hardcoded install path (`~/Kode/recursive-ai`) — make it relocatable
+- [x] ~~Remove hardcoded install path~~ — resolved via symlink resolution + template substitution
 - [ ] PyPI packaging (`pip install rlm` / `uv pip install rlm`)
 - [ ] Stable, documented CLI and MCP API
 - [ ] Comprehensive documentation and getting-started guide
@@ -168,7 +168,7 @@ All of the above must be complete before tagging 1.0. The key gates:
 
 **To test from terminal (recommended):**
 ```bash
-cd ~/Kode/recursive-ai
+cd /path/to/recursive-ai
 # Start a Claude Code session — the SessionStart hook will inject context automatically
 # MCP server approval prompt should appear on first use — approve it
 # Then ask: "use rlm_recall to search for X" to confirm native MCP tool calling works

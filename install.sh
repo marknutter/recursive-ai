@@ -12,8 +12,11 @@ echo ""
 # ── 1. Skill prompt ────────────────────────────────────────────────────────────
 echo "1/4 Installing /rlm skill..."
 mkdir -p "$SKILL_DIR"
-ln -sf "$SCRIPT_DIR/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
-echo "    → $SKILL_DIR/SKILL.md"
+# Remove old symlink if present (old installs used ln -sf, which causes
+# redirect to write through the symlink back into the source template)
+rm -f "$SKILL_DIR/SKILL.md"
+sed "s|__RLM_ROOT__|$SCRIPT_DIR|g" "$SCRIPT_DIR/skill/SKILL.md" > "$SKILL_DIR/SKILL.md"
+echo "    → $SKILL_DIR/SKILL.md (paths substituted)"
 
 # ── 2. Python package ──────────────────────────────────────────────────────────
 echo "2/4 Installing Python package..."
