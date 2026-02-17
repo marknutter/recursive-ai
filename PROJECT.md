@@ -59,6 +59,12 @@ Automatic persistent memory that survives context limits and session boundaries:
 
 # Implementation Roadmap
 
+## Version History
+- **0.1** — Core RLM analysis (scan/chunk/extract/dispatch loop, skill prompt)
+- **0.2** — Persistent memory (SQLite FTS5, recall pipeline, grep pre-filtering, graduated dispatch, self-improving strategies, chat data ingestion)
+- **0.3** — Auto-recall infrastructure (MCP server, conversation archiving hooks, zero-footprint install, export moved into package, global MCP config) ← **current**
+- **1.0** — Public release (PyPI packaging, relocatable install, stable API, external testing)
+
 ## Phase 1: Solidify Core RLM ✅ (Mostly Complete)
 - [x] Scan, chunk, extract, session management
 - [x] Multiple chunking strategies
@@ -92,11 +98,21 @@ Automatic persistent memory that survives context limits and session boundaries:
 - [ ] Source path tracking (re-extract on demand)
 
 ## Phase 5: Polish & Distribution 📋 (Planned)
-- [ ] Comprehensive documentation
-- [ ] Migration guides
+- [ ] Remove hardcoded install path (`~/Kode/recursive-ai`) — make it relocatable
+- [ ] PyPI packaging (`pip install rlm` / `uv pip install rlm`)
+- [ ] Stable, documented CLI and MCP API
+- [ ] Comprehensive documentation and getting-started guide
+- [ ] Migration guides (JSON → SQLite, per-project → global)
 - [ ] Performance benchmarks
 - [ ] Example workflows
-- [ ] Public release preparation
+- [ ] Test with at least one external user
+
+### 1.0 Release Criteria
+All of the above must be complete before tagging 1.0. The key gates:
+- Installable via `pip install rlm` without cloning the repo
+- No hardcoded paths — install works on any machine
+- Documented, stable CLI and MCP API
+- Tested by at least one person who isn't the author
 
 ---
 
