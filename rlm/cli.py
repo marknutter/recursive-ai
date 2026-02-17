@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 
-from rlm import scanner, chunker, extractor, state, memory
+from rlm import scanner, chunker, extractor, state, memory, export
 
 MAX_OUTPUT = 4000
 
@@ -330,6 +330,18 @@ def cmd_strategy(args):
         _print("Unknown strategy action. Use: show, log, perf")
 
 
+def cmd_export_session(args):
+    """Export a Claude Code session JSONL to readable transcript."""
+    output_path = args.output if args.output else None
+    text = export.export_session(args.session_file, output_path=output_path)
+
+    if output_path:
+        _print(f"Exported to {output_path} ({len(text):,} chars)")
+    else:
+        # Print without truncation — hooks pipe this into rlm remember
+        print(text)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="rlm",
@@ -449,6 +461,12 @@ def main():
     p_strategy.add_argument("--subagents", type=int, help="Subagents dispatched (perf)")
     p_strategy.add_argument("--notes", help="Strategy notes (perf)")
     p_strategy.set_defaults(func=cmd_strategy)
+
+    # export-session
+    p_export = subparsers.add_parser("export-session", help="Export session JSONL to transcript")
+    p_export.add_argument("session_file", help="Path to Claude Code .jsonl session file")
+    p_export.add_argument("--output", help="Write to file instead of stdout")
+    p_export.set_defaults(func=cmd_export_session)
 
     args = parser.parse_args()
     args.func(args)

@@ -9,32 +9,27 @@ catching sessions that close without compaction.
 import subprocess
 import sys
 from pathlib import Path
-import os
 from datetime import datetime
 import time
+
+# Absolute path to the RLM project — hooks run from any directory
+RLM_PROJECT = Path.home() / "Kode" / "recursive-ai"
 
 
 def log(msg: str):
     print(f"[RLM-SessionEnd] {msg}", file=sys.stderr)
 
 
-def get_project_root() -> Path:
-    """Get git project root, or cwd if not in a git repo."""
+def get_project_name() -> str:
+    """Get current project directory name from git root, or cwd."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=True,
+            capture_output=True, text=True, check=True,
         )
-        return Path(result.stdout.strip())
+        return Path(result.stdout.strip()).name
     except subprocess.CalledProcessError:
-        return Path.cwd()
-
-
-def get_project_name() -> str:
-    """Get project directory name."""
-    return get_project_root().name
+        return Path.cwd().name
 
 
 def get_session_file() -> Path | None:
@@ -82,25 +77,17 @@ def main():
             log("Session already archived by PreCompact hook - skipping")
             sys.exit(0)
 
-        project_root = get_project_root()
         project_name = get_project_name()
-        export_script = project_root / "examples" / "export_session.py"
-
-        # Check if we're in the recursive-ai project with export script
-        if not export_script.exists():
-            log("Export script not found - install RLM to enable episodic memory")
-            sys.exit(0)
 
         log(f"Archiving session on end...")
         log(f"Project: {project_name}")
         log(f"Session: {session_file.name}")
 
-        # Export session transcript
+        # Export session transcript via rlm CLI
         result = subprocess.run(
-            ["uv", "run", "python", str(export_script), str(session_file)],
+            ["uv", "run", "--project", str(RLM_PROJECT), "rlm", "export-session", str(session_file)],
             capture_output=True,
             text=True,
-            cwd=project_root,
             check=True,
         )
 
@@ -116,10 +103,9 @@ def main():
         summary = f"Conversation in {project_name} on {timestamp}"
 
         subprocess.run(
-            ["uv", "run", "rlm", "remember", "--stdin", "--tags", tags, "--summary", summary],
+            ["uv", "run", "--project", str(RLM_PROJECT), "rlm", "remember", "--stdin", "--tags", tags, "--summary", summary],
             input=transcript,
             text=True,
-            cwd=project_root,
             check=True,
             capture_output=True,
         )

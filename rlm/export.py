@@ -5,9 +5,7 @@ strips tool call noise, and outputs a readable conversation format.
 """
 
 import json
-import sys
 import re
-from pathlib import Path
 
 
 def extract_text_from_content(content):
@@ -57,7 +55,15 @@ def extract_text_from_content(content):
 
 
 def export_session(jsonl_path, output_path=None):
-    """Convert a session JSONL to readable conversation text."""
+    """Convert a session JSONL to readable conversation text.
+
+    Args:
+        jsonl_path: Path to the Claude Code .jsonl session file.
+        output_path: If provided, write to this file. Otherwise return text.
+
+    Returns:
+        The exported transcript as a string.
+    """
     messages = []
 
     with open(jsonl_path, "r") as f:
@@ -95,7 +101,7 @@ def export_session(jsonl_path, output_path=None):
             })
 
     # Deduplicate assistant messages — streaming creates many incremental updates
-    # Keep only the longest version for each parentUuid
+    # Keep only the longest version for each consecutive run
     deduped = []
     i = 0
     while i < len(messages):
@@ -134,19 +140,5 @@ def export_session(jsonl_path, output_path=None):
     if output_path:
         with open(output_path, "w") as f:
             f.write(output_text)
-        print(f"Exported {len(deduped)} messages to {output_path}")
-        print(f"Size: {len(output_text):,} chars")
-    else:
-        print(output_text)
 
     return output_text
-
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python export_session.py <session.jsonl> [output.txt]")
-        sys.exit(1)
-
-    jsonl_path = sys.argv[1]
-    output_path = sys.argv[2] if len(sys.argv) > 2 else None
-    export_session(jsonl_path, output_path)

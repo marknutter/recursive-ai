@@ -84,26 +84,41 @@ EOF
     echo "    → $HOOKS_JSON created"
 fi
 
-# ── 4. MCP server ─────────────────────────────────────────────────────────────
-echo "4/4 MCP server..."
-MCP_JSON="$SCRIPT_DIR/.mcp.json"
-if [ -f "$MCP_JSON" ]; then
-    echo "    → .mcp.json already exists (project-scoped MCP config)"
-else
-    cat > "$MCP_JSON" <<'EOF'
-{
-  "mcpServers": {
-    "rlm": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "python", "mcp/server.py"]
-    }
-  }
+# ── 4. MCP server (user-scoped, available in all projects) ───────────────────
+echo "4/4 Registering MCP server..."
+CLAUDE_JSON="$HOME/.claude.json"
+python3 -c "
+import json, os, sys
+
+path = '$CLAUDE_JSON'
+try:
+    with open(path, 'r') as f:
+        data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data = {}
+
+servers = data.setdefault('mcpServers', {})
+servers['rlm'] = {
+    'type': 'stdio',
+    'command': 'uv',
+    'args': [
+        'run',
+        '--project', '$SCRIPT_DIR',
+        'python', '$SCRIPT_DIR/mcp/server.py'
+    ]
 }
-EOF
-    echo "    → .mcp.json created"
-fi
+
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+print('    → Registered user-scoped MCP server in ' + path)
+"
 echo "    → On first use, Claude Code will ask you to approve the MCP server"
+
+# Clean up old project-scoped .mcp.json if present
+if [ -f "$SCRIPT_DIR/.mcp.json" ]; then
+    rm "$SCRIPT_DIR/.mcp.json"
+    echo "    → Removed old project-scoped .mcp.json"
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
@@ -117,9 +132,11 @@ echo ""
 echo "Auto-recall:"
 echo "  SessionStart hook: injects recent project context at session start"
 echo "  MCP tools (rlm_recall, rlm_remember, rlm_memory_list): available to"
-echo "  the agent automatically via .mcp.json — no /rlm invocation needed"
+echo "  the agent automatically — no /rlm invocation needed"
 echo ""
 echo "Hooks installed:"
 echo "  SessionStart → inject context from memory"
 echo "  PreCompact   → archive conversation before compaction"
 echo "  SessionEnd   → archive conversation on session end"
+echo ""
+echo "Nothing was added to your project directory."

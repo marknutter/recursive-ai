@@ -43,13 +43,19 @@ No API keys needed -- everything runs on your existing Claude Code subscription.
 ## Installation
 
 ```bash
-git clone <repo-url> && cd recursive-ai
+git clone <repo-url> ~/Kode/recursive-ai
+cd ~/Kode/recursive-ai
 bash install.sh
 ```
 
-This does two things:
-1. Symlinks the skill prompt into `~/.claude/skills/rlm/SKILL.md` so Claude Code recognizes the `/rlm` command
-2. Runs `uv sync` to install the `rlm` Python package
+The installer sets up four things — all in your home directory, nothing in your project:
+
+1. **Skill prompt** — Symlinks `SKILL.md` into `~/.claude/skills/rlm/` so Claude Code recognizes the `/rlm` command
+2. **Python package** — Runs `uv sync` to install the `rlm` CLI
+3. **Hooks** — Symlinks PreCompact, SessionEnd, and SessionStart hooks into `~/.claude/hooks/` for automatic conversation archiving
+4. **MCP server** — Registers a user-scoped MCP server in `~/.claude.json` so `rlm_recall`, `rlm_remember`, etc. are available as native tools in every project
+
+No files are added to any project directory. Everything lives under `~/.claude/`, `~/.rlm/`, and the cloned repo.
 
 ## Usage
 
@@ -136,7 +142,7 @@ Memory requires no additional setup beyond installation. The memory store is cre
 
 | Path | Purpose |
 |---|---|
-| `~/.rlm/memory/` | Persistent memory entries (JSON + content files) |
+| `~/.rlm/memory/memory.db` | SQLite FTS5 database (all entries + full-text index) |
 | `~/.rlm/strategies/learned_patterns.md` | Self-improving retrieval heuristics |
 | `~/.rlm/strategies/performance.jsonl` | Performance log from recall sessions |
 
@@ -144,48 +150,7 @@ Memory requires no additional setup beyond installation. The memory store is cre
 
 RLM includes Claude Code hooks that automatically archive your conversations to memory, creating a searchable knowledge base of all your work. This enables true cross-session continuity — you can pick up where you left off days or weeks later by simply asking what you were working on.
 
-**Installation:**
-
-```bash
-# Create hooks directory
-mkdir -p ~/.claude/hooks
-
-# Symlink the RLM hooks
-ln -s "$(pwd)/hooks/pre-compact-rlm.py" ~/.claude/hooks/rlm-precompact.py
-ln -s "$(pwd)/hooks/session-end-rlm.py" ~/.claude/hooks/rlm-sessionend.py
-
-# Create hooks configuration
-cat > ~/.claude/hooks/hooks.json <<'EOF'
-{
-  "hooks": {
-    "PreCompact": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/rlm-precompact.py\""
-          }
-        ],
-        "description": "Archive before compaction"
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/rlm-sessionend.py\""
-          }
-        ],
-        "description": "Archive on session end"
-      }
-    ]
-  }
-}
-EOF
-```
+Hooks are installed automatically by `install.sh`. They work from any project directory — no per-project setup needed.
 
 **What the hooks do:**
 
@@ -223,8 +188,8 @@ uv run python scripts/ingest_chat_data.py --source firebase --path /path/to/fire
 These commands can also be used standalone outside of `/rlm`:
 
 ```bash
-# Search memory (--deep scans content, not just summaries)
-uv run rlm recall "query" --deep [--tags tag1,tag2] [--max 20]
+# Search memory (FTS5 always searches content — --deep is accepted but no longer needed)
+uv run rlm recall "query" [--tags tag1,tag2] [--max 20]
 
 # Store a memory
 uv run rlm remember "content" --tags "tag1,tag2" --summary "description"
@@ -246,6 +211,9 @@ uv run rlm strategy log
 
 # Delete a memory
 uv run rlm forget <entry_id>
+
+# Export a session transcript (used by hooks, also available standalone)
+uv run rlm export-session /path/to/session.jsonl [--output /path/to/output.txt]
 ```
 
 ## Architecture
@@ -284,9 +252,17 @@ rlm/
                 Tracks the query, iteration log, accumulated subagent
                 results, and final answer.
 
-  memory.py     Persistent long-term memory. Storage, indexing, keyword
-                search, grep-within-entry, and bounded formatting. Entries
-                live at ~/.rlm/memory/ and persist across sessions.
+  memory.py     Persistent long-term memory. High-level API for storage,
+                search, grep-within-entry, and bounded formatting. Delegates
+                to db.py for all SQLite operations.
+
+  db.py         SQLite FTS5 backend. Schema management, CRUD, full-text
+                search with BM25 ranking and Porter stemming. Handles
+                thread-local connections and auto-migration from JSON.
+
+  export.py     Session transcript exporter. Reads Claude Code .jsonl session
+                files and produces readable conversation text, stripping tool
+                results and deduplicating streaming artifacts (~24x compression).
 
   cli.py        CLI entry point. All Claude<->Python interaction goes
                 through subcommands. All output is capped at 4000 characters
@@ -412,7 +388,7 @@ Language detection covers 40+ file extensions. Files with unrecognized extension
 
 ## Design Decisions
 
-**Zero external dependencies.** The entire project uses only Python's standard library (`os`, `pathlib`, `json`, `re`, `ast`, `argparse`, `hashlib`, `uuid`, `textwrap`, `time`). This means `uv sync` is near-instant with no version conflicts.
+**Zero external dependencies.** The entire project uses only Python's standard library (`os`, `pathlib`, `json`, `re`, `ast`, `argparse`, `hashlib`, `uuid`, `sqlite3`, `time`). Memory search uses SQLite FTS5 with BM25 ranking and Porter stemming — all built into Python's `sqlite3` module. This means `uv sync` is near-instant with no version conflicts.
 
 **Subagents, not direct reads.** The orchestrating Claude never reads target files with the Read tool. All content flows through `rlm extract` into Task subagents. This is the core principle from the RLM paper -- the LLM reasons about structure and delegates content inspection.
 
