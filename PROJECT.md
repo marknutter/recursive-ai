@@ -135,6 +135,29 @@ Automatic persistent memory that survives context limits and session boundaries:
 
 ## 1. Automatic Memory Utilization (Auto-Recall) 🎯 START HERE
 
+### Current Status (as of 2026-02-17)
+
+**What's implemented and working:**
+- ✅ `mcp/server.py` — Full MCP stdio JSON-RPC 2.0 server exposing 5 tools: `rlm_recall`, `rlm_remember`, `rlm_memory_list`, `rlm_memory_extract`, `rlm_forget`
+- ✅ `.mcp.json` — Project-scoped MCP config (Claude Code will prompt for approval on first use)
+- ✅ `hooks/session-start-rlm.py` — SessionStart hook that queries recent project memories and outputs `{"additionalContext": "..."}` JSON
+- ✅ Hook symlinked to `~/.claude/hooks/rlm-sessionstart.py` and registered in `~/.claude/hooks/hooks.json`
+- ✅ `install.sh` updated to 4-step installer covering all hooks + MCP config
+
+**Known limitation — Omnara compatibility:**
+- The SessionStart hook *runs* on Omnara (hook success message appears), but Omnara does **not** pass the `additionalContext` field through to the agent's context
+- This means the memory summary is generated but never injected — you see `SessionStart:resume hook success` but no memory context
+- MCP server approval also not yet tested on Omnara — unclear if Omnara supports the Claude Code MCP approval flow
+- **Workaround:** Use `/rlm "what were we working on"` manually at session start, or run this session from the terminal where hooks and MCP work as expected
+
+**To test from terminal (recommended):**
+```bash
+cd ~/Kode/recursive-ai
+# Start a Claude Code session — the SessionStart hook will inject context automatically
+# MCP server approval prompt should appear on first use — approve it
+# Then ask: "use rlm_recall to search for X" to confirm native MCP tool calling works
+```
+
 **The problem:** Users must explicitly invoke `/rlm "query"` to access past conversations. The system has the memory but the agent doesn't know to use it unless asked.
 
 **The goal:** Make AI agents automatically consult their memory when it would be helpful, without the user having to remember to invoke `/rlm`.
