@@ -191,19 +191,22 @@ def list_all_entries(
 
     if tags:
         # Filter: entry must have at least one matching tag
-        # Tags are stored as JSON arrays, so we use LIKE for each tag
-        tag_clauses = " OR ".join(["tags LIKE ?" for _ in tags])
-        tag_params = [f'%"{t.strip().lower()}"%' for t in tags]
+        # Use json_each() for exact tag matching (no substring false positives)
+        tag_placeholders = ",".join(["?" for _ in tags])
+        tag_params = [t.strip().lower() for t in tags]
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM entries WHERE {tag_clauses}",
+            f"""SELECT COUNT(DISTINCT e.id) FROM entries e, json_each(e.tags) j
+                WHERE j.value IN ({tag_placeholders})""",
             tag_params,
         ).fetchone()[0]
 
         rows = conn.execute(
-            f"""SELECT id, summary, tags, timestamp, source, source_name, char_count
-                FROM entries WHERE {tag_clauses}
-                ORDER BY timestamp DESC
+            f"""SELECT DISTINCT e.id, e.summary, e.tags, e.timestamp,
+                       e.source, e.source_name, e.char_count
+                FROM entries e, json_each(e.tags) j
+                WHERE j.value IN ({tag_placeholders})
+                ORDER BY e.timestamp DESC
                 LIMIT ? OFFSET ?""",
             tag_params + [limit, offset],
         ).fetchall()
@@ -252,8 +255,8 @@ def search_fts(
         return []
 
     if tags:
-        tag_clauses = " OR ".join(["e.tags LIKE ?" for _ in tags])
-        tag_params = [f'%"{t.strip().lower()}"%' for t in tags]
+        tag_placeholders = ",".join(["?" for _ in tags])
+        tag_params = [t.strip().lower() for t in tags]
 
         sql = f"""
             SELECT e.id, e.summary, e.tags, e.timestamp, e.source,
@@ -262,7 +265,10 @@ def search_fts(
             FROM entries_fts fts
             JOIN entries e ON e.rowid = fts.rowid
             WHERE entries_fts MATCH ?
-              AND ({tag_clauses})
+              AND e.id IN (
+                  SELECT DISTINCT e2.id FROM entries e2, json_each(e2.tags) j
+                  WHERE j.value IN ({tag_placeholders})
+              )
             ORDER BY rank
             LIMIT ?
         """
