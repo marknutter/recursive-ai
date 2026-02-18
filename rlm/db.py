@@ -177,6 +177,70 @@ def count_entries() -> int:
     return row[0]
 
 
+def get_stats() -> dict:
+    """Return aggregate statistics about the memory store."""
+    conn = _get_conn()
+
+    row = conn.execute("""
+        SELECT
+            COUNT(*) AS total_entries,
+            COALESCE(SUM(char_count), 0) AS total_chars,
+            COALESCE(AVG(char_count), 0) AS avg_chars,
+            COALESCE(MIN(char_count), 0) AS min_chars,
+            COALESCE(MAX(char_count), 0) AS max_chars,
+            COALESCE(MIN(timestamp), 0) AS oldest_ts,
+            COALESCE(MAX(timestamp), 0) AS newest_ts
+        FROM entries
+    """).fetchone()
+
+    # Count by source type
+    source_rows = conn.execute(
+        "SELECT source, COUNT(*) AS cnt, SUM(char_count) AS chars FROM entries GROUP BY source"
+    ).fetchall()
+    by_source = {r["source"]: {"count": r["cnt"], "chars": r["chars"] or 0} for r in source_rows}
+
+    # Top 15 tags by frequency
+    tag_rows = conn.execute("SELECT tags FROM entries").fetchall()
+    tag_counts: dict[str, int] = {}
+    for tr in tag_rows:
+        for tag in json.loads(tr["tags"]):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    top_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:15]
+
+    # Size distribution
+    size_rows = conn.execute("""
+        SELECT
+            SUM(CASE WHEN char_count <= 2000 THEN 1 ELSE 0 END) AS small,
+            SUM(CASE WHEN char_count > 2000 AND char_count <= 10000 THEN 1 ELSE 0 END) AS medium,
+            SUM(CASE WHEN char_count > 10000 AND char_count <= 50000 THEN 1 ELSE 0 END) AS large,
+            SUM(CASE WHEN char_count > 50000 THEN 1 ELSE 0 END) AS huge
+        FROM entries
+    """).fetchone()
+
+    # Database file size
+    db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+
+    return {
+        "total_entries": row["total_entries"],
+        "total_chars": row["total_chars"],
+        "avg_chars": round(row["avg_chars"]),
+        "min_chars": row["min_chars"],
+        "max_chars": row["max_chars"],
+        "oldest_timestamp": row["oldest_ts"],
+        "newest_timestamp": row["newest_ts"],
+        "by_source": by_source,
+        "top_tags": top_tags,
+        "unique_tags": len(tag_counts),
+        "size_distribution": {
+            "small (≤2KB)": size_rows["small"] or 0,
+            "medium (2-10KB)": size_rows["medium"] or 0,
+            "large (10-50KB)": size_rows["large"] or 0,
+            "huge (>50KB)": size_rows["huge"] or 0,
+        },
+        "db_file_size": db_size,
+    }
+
+
 def list_all_entries(
     tags: list[str] | None = None,
     offset: int = 0,

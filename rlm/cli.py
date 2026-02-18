@@ -330,6 +330,73 @@ def cmd_strategy(args):
         _print("Unknown strategy action. Use: show, log, perf")
 
 
+def cmd_stats(args):
+    """Show memory store statistics."""
+    from datetime import datetime
+    from rlm import db
+
+    memory.init_memory_store()
+    stats = db.get_stats()
+
+    def fmt_size(chars):
+        if chars >= 1_000_000:
+            return f"{chars / 1_000_000:.1f}M chars"
+        if chars >= 1_000:
+            return f"{chars / 1_000:.1f}K chars"
+        return f"{chars} chars"
+
+    def fmt_bytes(b):
+        if b >= 1_000_000:
+            return f"{b / 1_000_000:.1f} MB"
+        if b >= 1_000:
+            return f"{b / 1_000:.1f} KB"
+        return f"{b} bytes"
+
+    lines = ["RLM Memory Statistics", "=" * 40, ""]
+
+    # Overview
+    lines.append(f"Entries:        {stats['total_entries']}")
+    lines.append(f"Total content:  {fmt_size(stats['total_chars'])}")
+    lines.append(f"Database size:  {fmt_bytes(stats['db_file_size'])}")
+    lines.append(f"Unique tags:    {stats['unique_tags']}")
+    lines.append("")
+
+    # Date range
+    if stats["oldest_timestamp"]:
+        oldest = datetime.fromtimestamp(stats["oldest_timestamp"]).strftime("%Y-%m-%d")
+        newest = datetime.fromtimestamp(stats["newest_timestamp"]).strftime("%Y-%m-%d")
+        lines.append(f"Date range:     {oldest} → {newest}")
+        lines.append("")
+
+    # Size stats
+    lines.append(f"Entry sizes:    avg {fmt_size(stats['avg_chars'])}, "
+                 f"min {fmt_size(stats['min_chars'])}, "
+                 f"max {fmt_size(stats['max_chars'])}")
+    lines.append("")
+
+    # Size distribution
+    lines.append("Size distribution:")
+    for bucket, count in stats["size_distribution"].items():
+        bar = "█" * min(count, 40)
+        lines.append(f"  {bucket:<16} {count:>4}  {bar}")
+    lines.append("")
+
+    # By source
+    if stats["by_source"]:
+        lines.append("By source:")
+        for source, info in sorted(stats["by_source"].items(), key=lambda x: -x[1]["count"]):
+            lines.append(f"  {source:<12} {info['count']:>4} entries  ({fmt_size(info['chars'])})")
+        lines.append("")
+
+    # Top tags
+    if stats["top_tags"]:
+        lines.append("Top tags:")
+        for tag, count in stats["top_tags"]:
+            lines.append(f"  {tag:<24} {count:>4}")
+
+    _print("\n".join(lines))
+
+
 def cmd_export_session(args):
     """Export a Claude Code session JSONL to readable transcript."""
     output_path = args.output if args.output else None
@@ -461,6 +528,10 @@ def main():
     p_strategy.add_argument("--subagents", type=int, help="Subagents dispatched (perf)")
     p_strategy.add_argument("--notes", help="Strategy notes (perf)")
     p_strategy.set_defaults(func=cmd_strategy)
+
+    # stats
+    p_stats = subparsers.add_parser("stats", help="Show memory store statistics")
+    p_stats.set_defaults(func=cmd_stats)
 
     # export-session
     p_export = subparsers.add_parser("export-session", help="Export session JSONL to transcript")
