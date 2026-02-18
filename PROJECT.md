@@ -153,25 +153,32 @@ All of the above must be complete before tagging 1.0. The key gates:
 
 ### Current Status (as of 2026-02-17)
 
+**✅ MCP AUTO-RECALL FULLY WORKING IN TERMINAL SESSIONS!**
+
+The #1 priority from the roadmap is now complete. Testing confirmed:
+- All 5 MCP tools (`rlm_recall`, `rlm_remember`, `rlm_memory_list`, `rlm_memory_extract`, `rlm_forget`) available as native operations
+- Agent proactively uses these tools without needing `/rlm` skill invocation
+- Excellent retrieval quality with grep pre-filtering for large memories
+- SessionStart hook automatically injects recent project context
+
 **What's implemented and working:**
-- ✅ `mcp/server.py` — Full MCP stdio JSON-RPC 2.0 server exposing 5 tools: `rlm_recall`, `rlm_remember`, `rlm_memory_list`, `rlm_memory_extract`, `rlm_forget`
-- ✅ `.mcp.json` — Project-scoped MCP config (Claude Code will prompt for approval on first use)
-- ✅ `hooks/session-start-rlm.py` — SessionStart hook that queries recent project memories and outputs `{"additionalContext": "..."}` JSON
-- ✅ Hook symlinked to `~/.claude/hooks/rlm-sessionstart.py` and registered in `~/.claude/hooks/hooks.json`
-- ✅ `install.sh` updated to 4-step installer covering all hooks + MCP config
+- ✅ `mcp/server.py` — Full MCP stdio JSON-RPC 2.0 server exposing 5 tools
+- ✅ `.mcp.json` — Project-scoped MCP config (approval persists after first use)
+- ✅ `hooks/session-start-rlm.py` — SessionStart hook that queries recent project memories
+- ✅ Hook symlinked and registered globally via `install.sh`
+- ✅ Native MCP tool calling confirmed working in terminal sessions
 
 **Known limitation — Omnara compatibility:**
-- The SessionStart hook *runs* on Omnara (hook success message appears), but Omnara does **not** pass the `additionalContext` field through to the agent's context
-- This means the memory summary is generated but never injected — you see `SessionStart:resume hook success` but no memory context
-- MCP server approval also not yet tested on Omnara — unclear if Omnara supports the Claude Code MCP approval flow
-- **Workaround:** Use `/rlm "what were we working on"` manually at session start, or run this session from the terminal where hooks and MCP work as expected
+- The SessionStart hook *runs* on Omnara but Omnara ignores the `additionalContext` field
+- MCP tools work on Omnara (confirmed via direct tool calls) but not as seamlessly
+- **Workaround:** Terminal sessions provide the full auto-recall experience
 
-**To test from terminal (recommended):**
+**To use auto-recall:**
 ```bash
 cd /path/to/recursive-ai
-# Start a Claude Code session — the SessionStart hook will inject context automatically
-# MCP server approval prompt should appear on first use — approve it
-# Then ask: "use rlm_recall to search for X" to confirm native MCP tool calling works
+# Start a Claude Code session from terminal
+# MCP tools are immediately available - no /rlm needed
+# Agent will proactively search memory when relevant
 ```
 
 **The problem:** Users must explicitly invoke `/rlm "query"` to access past conversations. The system has the memory but the agent doesn't know to use it unless asked.
