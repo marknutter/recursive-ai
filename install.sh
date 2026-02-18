@@ -28,12 +28,12 @@ echo "    → uv sync complete"
 echo "3/4 Installing Claude Code hooks..."
 mkdir -p "$HOOKS_DIR"
 
-# Symlink hook scripts
-ln -sf "$SCRIPT_DIR/hooks/pre-compact-rlm.py"   "$HOOKS_DIR/rlm-precompact.py"
-ln -sf "$SCRIPT_DIR/hooks/session-end-rlm.py"   "$HOOKS_DIR/rlm-sessionend.py"
+# Symlink hook scripts (semantic versions for improved tagging)
+ln -sf "$SCRIPT_DIR/hooks/pre-compact-rlm-semantic.py"   "$HOOKS_DIR/rlm-precompact.py"
+ln -sf "$SCRIPT_DIR/hooks/session-end-rlm-semantic.py"   "$HOOKS_DIR/rlm-sessionend.py"
 ln -sf "$SCRIPT_DIR/hooks/session-start-rlm.py" "$HOOKS_DIR/rlm-sessionstart.py"
-echo "    → $HOOKS_DIR/rlm-precompact.py"
-echo "    → $HOOKS_DIR/rlm-sessionend.py"
+echo "    → $HOOKS_DIR/rlm-precompact.py (with semantic tagging)"
+echo "    → $HOOKS_DIR/rlm-sessionend.py (with semantic tagging)"
 echo "    → $HOOKS_DIR/rlm-sessionstart.py"
 
 # Write hooks.json (merge if it already exists and has other hooks)
