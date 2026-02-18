@@ -62,7 +62,8 @@ Automatic persistent memory that survives context limits and session boundaries:
 ## Version History
 - **0.1** — Core RLM analysis (scan/chunk/extract/dispatch loop, skill prompt)
 - **0.2** — Persistent memory (SQLite FTS5, recall pipeline, grep pre-filtering, graduated dispatch, self-improving strategies, chat data ingestion)
-- **0.3** — Auto-recall infrastructure (MCP server, conversation archiving hooks, zero-footprint install, export moved into package, global MCP config) ← **current**
+- **0.3** — Auto-recall infrastructure (MCP server, conversation archiving hooks, zero-footprint install, export moved into package, global MCP config)
+- **0.4** — Compression + quality (semantic tagging, two-tier storage, structural compression, session summaries) ← **current**
 - **1.0** — Public release (PyPI packaging, relocatable install, stable API, external testing)
 
 ## Phase 1: Solidify Core RLM ✅ (Mostly Complete)
@@ -233,32 +234,31 @@ cd /path/to/recursive-ai
 **Before:** `conversation,session,recursive-ai,2026-02-17`
 **After:** `conversation,session,recursive-ai,2026-02-17,mcp,test,server,hooks,semantic,feature,testing,tagging,recall`
 
-## 3. Intelligent Transcript Compression
+## 3. Intelligent Transcript Compression ✅ COMPLETE (2026-02-18)
 
-**The problem:** Raw session JSONL files are ~2.5MB. The current export script reduces this to ~107KB (24x compression) by extracting only user/assistant messages and summarizing tool calls. But 107KB is still a lot of content for a single conversation, much of which is boilerplate, repeated context, or verbose tool output that isn't useful for long-term memory.
+**The problem:** Archived conversations were ~80-160KB each. With 337+ entries, this made recall noisy — subagents spent tokens on skill prompts, filler, and terminal output instead of decisions.
 
-**The goal:** Reduce stored conversation size by another 5-10x while preserving the information that matters for future recall. Like human memory: remember the decisions, insights, and key exchanges — not every keystroke.
+**The solution:** Two-tier storage with structural compression:
 
-**Why do this third:** Directly improves what auto-recall (#1) retrieves, and semantic tagging (#2) makes it easier to identify what to compress vs. preserve.
+### What was implemented:
+- ✅ **Structural compression in `rlm/export.py`**: Strip skill prompt injections (84% of user content!), command-message XML, system reminders. Collapse trivial confirmations, compress tool-only messages, strip boilerplate openers, truncate pasted terminal output, compact headers.
+- ✅ **Session summary generator `rlm/summarize.py`**: LLM-based summary with keyword extraction fallback. Extracts decisions, questions, commits, files modified.
+- ✅ **Shared archive logic `rlm/archive.py`**: Two-tier storage — summary entry (~1KB, primary search target) + compressed transcript (~60KB, for drill-down). Linked by shared `session_id` tag.
+- ✅ **Updated hooks**: Both PreCompact and SessionEnd hooks now use `rlm/archive.py` for consistent two-tier archival.
 
-### Performance benchmarks:
-- [ ] **Establish formal benchmarks**: Define metrics (context leverage ratio, recall accuracy, subagent efficiency, wall-clock time) and create reproducible test suites.
-- [ ] **Compare against paper results**: The paper reports 100x context leverage. Our best is 5,600x on CPython (total codebase) and 63x on Juice Shop (relevant content). Understand where we're outperforming and where we're falling short.
-- [ ] **Benchmark against competing tools**: Compare RLM analysis vs. Aider's repo map, Cursor's codebase indexing, OpenClaw's hybrid search on identical tasks.
+### Compression results:
+- Skill-heavy sessions: **164KB → 60KB (63% reduction)** + 1KB summary
+- Normal sessions: **79KB → 76KB (4% reduction)** + 1KB summary
+- The big win was discovering that **84% of user content was injected skill prompts** — stripping those is the highest-leverage compression
 
-### Chunking strategy improvements:
-- [ ] **Adaptive chunk sizing**: Instead of fixed chunk sizes, dynamically size chunks based on content density and query relevance signals.
-- [ ] **Cross-file dependency awareness**: When analyzing function X, automatically include its imports, callers, and type definitions in the same chunk.
-- [ ] **AST-aware chunking for more languages**: Expand proper AST parsing beyond Python to JS/TS, Go, Rust (currently regex-based).
-
-### Subagent dispatch improvements:
-- [ ] **Smarter pre-filtering**: Use grep/keyword analysis before dispatching subagents to skip irrelevant chunks (already done for recall, extend to analysis).
-- [ ] **Confidence-based early termination**: If first wave of subagents all agree on a finding with high confidence, skip remaining waves.
-- [ ] **Result deduplication**: Detect when multiple subagents report the same finding from different chunks.
-
-### Iteration loop improvements:
-- [ ] **Drill-down heuristics**: Better automatic decisions about when to re-chunk at finer granularity vs. when to accept results.
-- [ ] **Cross-reference resolution**: When a subagent says "this function calls X.authenticate()", automatically queue X for analysis.
+### Architecture:
+```
+Session JSONL (~2-6MB)
+  → export.py (structural compression)
+  → summarize.py (generates ~1KB summary)
+  → archive.py (stores both entries, linked by session_id tag)
+  → Memory: summary entry + full transcript entry
+```
 
 ## 5. SQLite Memory Store Improvements
 
