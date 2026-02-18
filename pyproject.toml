@@ -3,10 +3,11 @@ name = "rlm"
 version = "0.1.0"
 description = "Recursive Language Model - process content beyond context windows using recursive sub-LLM delegation"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["textual>=0.70.0"]
 
 [project.scripts]
 rlm = "rlm.cli:main"
+rlm-tui = "rlm.tui:main"
 
 [build-system]
 requires = ["hatchling"]

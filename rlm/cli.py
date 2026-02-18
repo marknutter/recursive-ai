@@ -397,6 +397,13 @@ def cmd_stats(args):
     _print("\n".join(lines))
 
 
+def cmd_tui(args):
+    """Launch the interactive TUI dashboard."""
+    from rlm.tui import RlmTuiApp
+    app = RlmTuiApp()
+    app.run()
+
+
 def cmd_export_session(args):
     """Export a Claude Code session JSONL to readable transcript."""
     output_path = args.output if args.output else None
@@ -532,6 +539,10 @@ def main():
     # stats
     p_stats = subparsers.add_parser("stats", help="Show memory store statistics")
     p_stats.set_defaults(func=cmd_stats)
+
+    # tui
+    p_tui = subparsers.add_parser("tui", help="Launch interactive TUI dashboard")
+    p_tui.set_defaults(func=cmd_tui)
 
     # export-session
     p_export = subparsers.add_parser("export-session", help="Export session JSONL to transcript")
