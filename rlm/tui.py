@@ -114,14 +114,20 @@ class RlmTuiApp(App):
         height: 1fr;
     }
     #tags-sidebar {
-        width: 24;
+        width: 28;
         height: 1fr;
         border-right: solid $accent;
         padding: 0 1;
+        overflow-y: auto;
     }
     #tags-sidebar-title {
         text-style: bold;
         padding: 0 0 1 0;
+    }
+    .sidebar-section-title {
+        text-style: bold;
+        color: $accent;
+        padding: 1 0 0 0;
     }
     #browse-main {
         height: 1fr;
@@ -197,9 +203,14 @@ class RlmTuiApp(App):
             # Browse tab
             with TabPane("Browse", id="browse"):
                 with Horizontal(id="browse-layout"):
-                    with Vertical(id="tags-sidebar"):
+                    with VerticalScroll(id="tags-sidebar"):
                         yield Label("Tags", id="tags-sidebar-title")
-                        yield ListView(id="sidebar-tags-list")
+                        yield Label("Recent (7d)", classes="sidebar-section-title")
+                        yield ListView(id="sidebar-recent-list")
+                        yield Label("Sessions", classes="sidebar-section-title")
+                        yield ListView(id="sidebar-sessions-list")
+                        yield Label("All Tags", classes="sidebar-section-title")
+                        yield ListView(id="sidebar-all-list")
                     with Vertical(id="browse-main"):
                         yield Input(placeholder="Filter by tags (comma-separated)...", id="browse-filter")
                         yield DataTable(id="browse-table", cursor_type="row")
@@ -284,11 +295,26 @@ class RlmTuiApp(App):
             status.update(f"Showing {showing} of {total} entries")
 
     def _load_sidebar_tags(self) -> None:
-        sidebar = self.query_one("#sidebar-tags-list", ListView)
-        sidebar.clear()
-        tag_counts = db.list_all_tags()
-        for tag, count in list(tag_counts.items())[:30]:
-            sidebar.append(ListItem(Label(f"{tag} ({count})")))
+        # Recent tags (last 7 days)
+        recent_list = self.query_one("#sidebar-recent-list", ListView)
+        recent_list.clear()
+        recent_tags = db.list_recent_tags(days=7)
+        for tag, count in list(recent_tags.items())[:10]:
+            recent_list.append(ListItem(Label(f"{tag} ({count})")))
+
+        # Session tags (semantic/project tags from archived sessions)
+        sessions_list = self.query_one("#sidebar-sessions-list", ListView)
+        sessions_list.clear()
+        session_tags = db.list_tags_for_tagged_entries("session", limit=10)
+        for tag, count in session_tags.items():
+            sessions_list.append(ListItem(Label(f"{tag} ({count})")))
+
+        # All tags (top 10 by overall frequency)
+        all_list = self.query_one("#sidebar-all-list", ListView)
+        all_list.clear()
+        all_tags = db.list_all_tags()
+        for tag, count in list(all_tags.items())[:10]:
+            all_list.append(ListItem(Label(f"{tag} ({count})")))
 
     # --- Search ---
 
@@ -427,7 +453,8 @@ class RlmTuiApp(App):
             tabs.active = "browse"
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id == "sidebar-tags-list":
+        sidebar_ids = {"sidebar-recent-list", "sidebar-sessions-list", "sidebar-all-list"}
+        if event.list_view.id in sidebar_ids:
             label = event.item.query_one(Label)
             tag_text = str(label.content)
             # Extract tag name from "tag-name (N)" format

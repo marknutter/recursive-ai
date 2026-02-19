@@ -310,6 +310,49 @@ def list_all_tags() -> dict[str, int]:
     return dict(sorted(tag_counts.items(), key=lambda x: (-x[1], x[0])))
 
 
+_SYSTEM_TAGS = frozenset({
+    "session", "conversation", "summary", "session-summary",
+    "full-transcript", "transcript",
+})
+
+
+def list_recent_tags(days: int = 7) -> dict[str, int]:
+    """Return tags from recently archived sessions (last N days), excluding system tags."""
+    import time
+
+    conn = _get_conn()
+    cutoff = time.time() - (days * 86400)
+    rows = conn.execute(
+        """SELECT tags FROM entries
+           WHERE timestamp > ?
+             AND (source LIKE '%session%' OR source = 'stdin')""",
+        (cutoff,),
+    ).fetchall()
+    tag_counts: dict[str, int] = {}
+    for row in rows:
+        for tag in json.loads(row["tags"]):
+            if tag.lower() not in _SYSTEM_TAGS:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    return dict(sorted(tag_counts.items(), key=lambda x: (-x[1], x[0])))
+
+
+def list_tags_for_tagged_entries(required_tag: str, limit: int = 10) -> dict[str, int]:
+    """Return tag counts from entries that have required_tag, excluding system tags."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT e.tags FROM entries e, json_each(e.tags) AS jt
+           WHERE LOWER(jt.value) = LOWER(?)""",
+        (required_tag,),
+    ).fetchall()
+    tag_counts: dict[str, int] = {}
+    for row in rows:
+        for tag in json.loads(row["tags"]):
+            if tag.lower() not in _SYSTEM_TAGS:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    sorted_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))
+    return dict(sorted_tags[:limit])
+
+
 # --- FTS5 search ---
 
 
