@@ -5,6 +5,9 @@ Implements two-tier storage:
 2. Full transcript (~50-80KB) — compressed conversation for drill-down
 
 Both entries share a session_id tag for linking.
+
+Content deduplication: uses session JSONL filename as identifier.
+Skips if file unchanged since last archive, replaces if new content exists.
 """
 
 import subprocess
@@ -12,6 +15,8 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+from rlm import db, memory
 
 # Resolve to find the RLM project root (this file lives in rlm/)
 RLM_PROJECT = Path(__file__).resolve().parent.parent
@@ -45,30 +50,37 @@ def get_session_file() -> Path | None:
     return max(session_files, key=lambda p: p.stat().st_mtime)
 
 
-def mark_as_archived(session_file: Path):
-    """Create marker file to prevent duplicate archiving."""
+def mark_as_archived(session_file: Path, file_size: int | None = None):
+    """Create marker file to prevent duplicate archiving.
+
+    Stores the file size so we can detect changes on next archive attempt.
+    """
     marker = session_file.with_suffix(session_file.suffix + ".rlm-archived")
-    marker.write_text(datetime.now().isoformat())
+    size = file_size if file_size is not None else session_file.stat().st_size
+    marker.write_text(f"{datetime.now().isoformat()}\n{size}")
 
 
-def _store_memory(content: str, tags: str, summary: str):
-    """Store a memory entry via the rlm CLI."""
-    subprocess.run(
-        [
-            "uv", "run", "--project", str(RLM_PROJECT),
-            "rlm", "remember", "--stdin",
-            "--tags", tags,
-            "--summary", summary,
-        ],
-        input=content,
-        text=True,
-        check=True,
-        capture_output=True,
-    )
+def read_archived_size(session_file: Path) -> int | None:
+    """Read the file size stored in the archive marker, if it exists."""
+    marker = session_file.with_suffix(session_file.suffix + ".rlm-archived")
+    if not marker.exists():
+        return None
+    try:
+        lines = marker.read_text().strip().split("\n")
+        if len(lines) >= 2:
+            return int(lines[1])
+    except (ValueError, OSError):
+        pass
+    return None
 
 
 def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | None = None):
     """Export, compress, summarize, and store a session as two memory entries.
+
+    Deduplication: uses the session JSONL filename as an identifier.
+    - If no prior archive exists for this file → archive normally
+    - If file size is unchanged since last archive → skip
+    - If file has grown → delete old entries and re-archive
 
     Args:
         session_file: Path to the Claude Code .jsonl session file.
@@ -81,6 +93,26 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     from rlm.semantic_tags import extract_semantic_tags, combine_tags
     from rlm.summarize import generate_summary
 
+    memory.init_memory_store()
+
+    session_filename = session_file.name
+    current_file_size = session_file.stat().st_size
+
+    # --- Dedup check ---
+    # First check the marker file (fast, no DB query needed)
+    archived_size = read_archived_size(session_file)
+    if archived_size is not None and archived_size == current_file_size:
+        log(hook_name, f"Already archived, file unchanged ({session_filename}) — skipping")
+        return False
+
+    # File has changed or no marker — check DB for existing entries to replace
+    existing = db.find_entries_by_source_name(session_filename)
+    if existing:
+        log(hook_name, f"Session has new content — replacing {len(existing)} old entries")
+        for entry in existing:
+            db.delete_entry(entry["id"])
+
+    # --- Archive ---
     project_name = get_project_name(cwd=cwd)
     session_id = f"s_{uuid.uuid4().hex[:8]}"
     timestamp = datetime.now().strftime("%Y-%m-%d")
@@ -107,31 +139,49 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     # Step 2: Generate semantic tags
     log(hook_name, "Extracting semantic tags...")
     semantic_tags = extract_semantic_tags(transcript)
-    base_tags = f"conversation,session,{project_name},{timestamp},{session_id}"
+    base_tags = [
+        "conversation", "session", project_name, timestamp, session_id,
+    ]
 
     if semantic_tags:
-        tags = combine_tags(base_tags, semantic_tags)
+        all_tags = combine_tags(",".join(base_tags), semantic_tags)
         log(hook_name, f"Semantic tags: {', '.join(semantic_tags)}")
     else:
-        tags = base_tags
+        all_tags = ",".join(base_tags)
 
     # Step 3: Generate summary
     log(hook_name, "Generating session summary...")
     summary_text = generate_summary(transcript)
 
     # Step 4: Store summary entry (small, dense — primary search target)
-    summary_tags = combine_tags(f"summary,session-summary,{tags}", [])
+    summary_tags_str = combine_tags(f"summary,session-summary,{all_tags}", [])
+    summary_tags_list = [t.strip() for t in summary_tags_str.split(",") if t.strip()]
     summary_label = f"Session summary: {project_name} on {timestamp}"
-    _store_memory(summary_text, summary_tags, summary_label)
+    memory.add_memory(
+        content=summary_text,
+        tags=summary_tags_list,
+        source="session-summary",
+        source_name=session_filename,
+        summary=summary_label,
+    )
     log(hook_name, f"  Summary: {len(summary_text):,} chars")
 
     # Step 5: Store full transcript (larger, for drill-down)
-    transcript_tags = combine_tags(f"transcript,full-transcript,{tags}", [])
+    transcript_tags_str = combine_tags(f"transcript,full-transcript,{all_tags}", [])
+    transcript_tags_list = [t.strip() for t in transcript_tags_str.split(",") if t.strip()]
     transcript_label = f"Full transcript: {project_name} on {timestamp}"
-    _store_memory(transcript, transcript_tags, transcript_label)
+    memory.add_memory(
+        content=transcript,
+        tags=transcript_tags_list,
+        source="session-transcript",
+        source_name=session_filename,
+        summary=transcript_label,
+    )
     log(hook_name, f"  Transcript: {len(transcript):,} chars")
 
     log(hook_name, f"Archived to ~/.rlm/memory/ (session: {session_id})")
-    log(hook_name, f"  Tags: {tags}")
+
+    # Update marker with current file size
+    mark_as_archived(session_file, file_size=current_file_size)
 
     return True
