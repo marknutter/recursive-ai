@@ -151,6 +151,18 @@ def source_name_exists(source_name: str) -> bool:
     return row is not None
 
 
+def find_entries_by_source_name(source_name: str) -> list[dict]:
+    """Find all entries with a given source_name (metadata only, no content)."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT id, summary, tags, timestamp, source, source_name, char_count
+           FROM entries WHERE source_name = ?
+           ORDER BY timestamp DESC""",
+        (source_name,),
+    ).fetchall()
+    return [_row_to_index_dict(row) for row in rows]
+
+
 def get_entry(entry_id: str) -> dict | None:
     """Load a full memory entry by ID. Returns None if not found."""
     conn = _get_conn()

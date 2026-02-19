@@ -89,7 +89,7 @@ Automatic persistent memory that survives context limits and session boundaries:
 - [ ] Memory importance scoring (information density, decision count, topic novelty)
 - [ ] Memory consolidation (synthesize patterns across related conversations)
 - [ ] Forgetting curve (boost frequently-recalled memories, decay stale ones)
-- [ ] Content deduplication (detect and skip re-archived sessions)
+- [x] Content deduplication (detect and skip re-archived sessions)
 - [ ] Retention policies (auto-compress old memories >30 days)
 
 ### Schema & Search
@@ -99,7 +99,7 @@ Automatic persistent memory that survives context limits and session boundaries:
 - [ ] Ranked tag search (weight exact matches higher than partial)
 
 ### Developer Experience
-- [ ] Memory dashboard (web UI or TUI to browse/search/manage)
+- [x] Memory dashboard (TUI to browse/search/manage)
 - [ ] Export/import (backup and migration between machines)
 - [ ] Privacy controls (mark memories as "do not recall", auto-redact secrets)
 - [ ] Documentation and examples
