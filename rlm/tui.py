@@ -111,11 +111,11 @@ class RlmTuiApp(App):
 
     CSS = """
     #browse-layout {
-        height: 100%;
+        height: 1fr;
     }
     #tags-sidebar {
         width: 24;
-        height: 100%;
+        height: 1fr;
         border-right: solid $accent;
         padding: 0 1;
     }
@@ -124,7 +124,13 @@ class RlmTuiApp(App):
         padding: 0 0 1 0;
     }
     #browse-main {
-        height: 100%;
+        height: 1fr;
+    }
+    #browse-table {
+        height: 1fr;
+    }
+    #search-table {
+        height: 1fr;
     }
     #browse-filter {
         dock: top;
@@ -423,7 +429,7 @@ class RlmTuiApp(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id == "sidebar-tags-list":
             label = event.item.query_one(Label)
-            tag_text = str(label.renderable)
+            tag_text = str(label.content)
             # Extract tag name from "tag-name (N)" format
             tag = tag_text.rsplit(" (", 1)[0]
             filter_input = self.query_one("#browse-filter", Input)
