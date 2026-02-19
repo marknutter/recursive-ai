@@ -134,6 +134,20 @@ To make `rlm` available globally without `uv run`:
 uv tool install -e .
 ```
 
+## Uninstalling
+
+```bash
+bash uninstall.sh
+```
+
+This cleanly removes everything RLM installed:
+1. Skill prompt (`~/.claude/skills/rlm/`)
+2. Hook symlinks and hook config entries
+3. MCP server registration from `~/.claude.json`
+4. Global CLI tool (if installed via `uv tool install`)
+
+Your memory data at `~/.rlm/` is preserved — delete it manually if you want a full wipe. Claude Code will not be affected in any way after uninstalling.
+
 ## Usage
 
 In any Claude Code session:
