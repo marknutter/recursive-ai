@@ -21,16 +21,17 @@ def log(prefix: str, msg: str):
     print(f"[{prefix}] {msg}", file=sys.stderr)
 
 
-def get_project_name() -> str:
+def get_project_name(cwd: str | None = None) -> str:
     """Get current project directory name from git root, or cwd."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, check=True,
+            cwd=cwd,
         )
         return Path(result.stdout.strip()).name
     except subprocess.CalledProcessError:
-        return Path.cwd().name
+        return Path(cwd).name if cwd else Path.cwd().name
 
 
 def get_session_file() -> Path | None:
@@ -66,7 +67,7 @@ def _store_memory(content: str, tags: str, summary: str):
     )
 
 
-def archive_session(session_file: Path, hook_name: str = "Archive"):
+def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | None = None):
     """Export, compress, summarize, and store a session as two memory entries.
 
     Args:
@@ -80,7 +81,7 @@ def archive_session(session_file: Path, hook_name: str = "Archive"):
     from rlm.semantic_tags import extract_semantic_tags, combine_tags
     from rlm.summarize import generate_summary
 
-    project_name = get_project_name()
+    project_name = get_project_name(cwd=cwd)
     session_id = f"s_{uuid.uuid4().hex[:8]}"
     timestamp = datetime.now().strftime("%Y-%m-%d")
 
