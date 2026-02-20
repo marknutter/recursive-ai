@@ -26,17 +26,16 @@ Without URL support, users must manually fetch content, save it to a file, then 
 
 ### CLI Interface
 
+URLs are auto-detected by protocol (`http://` / `https://`) when passed as the content argument to `remember`. No separate command needed:
+
 ```bash
-# Remember a single web page
-rlm remember-url "https://docs.example.com/api" --tags "api,docs" --summary "Example API reference"
+# Remember a single web page — URL auto-detected
+rlm remember "https://docs.example.com/api" --tags "api,docs" --summary "Example API reference"
 
 # Remember a GitHub repo (clones to temp dir, scans, and ingests key files)
-rlm remember-url "https://github.com/user/repo" --tags "repo,project" --depth 2
+rlm remember "https://github.com/user/repo" --tags "repo,project" --depth 2
 
-# Remember with explicit content type hint
-rlm remember-url "https://example.com/openapi.json" --type api-spec
-
-# Also works as a flag on the existing remember command
+# Explicit --url flag also works
 rlm remember --url "https://docs.example.com/guide" --tags "guide"
 ```
 

@@ -88,7 +88,7 @@ def handle_tool_call(name: str, arguments: dict) -> str:
         tags = arguments.get("tags", "")
         summary = arguments.get("summary", "")
         depth = arguments.get("depth", 2)
-        cmd = ["remember-url", url, "--depth", str(depth)]
+        cmd = ["remember", url, "--depth", str(depth)]
         if tags:
             cmd += ["--tags", tags]
         if summary:

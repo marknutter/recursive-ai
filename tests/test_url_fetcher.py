@@ -12,7 +12,30 @@ from rlm.url_fetcher import (
     _github_file_to_raw_url,
     detect_url_type,
     html_to_text,
+    is_url,
 )
+
+
+class TestIsURL(unittest.TestCase):
+    """Test URL auto-detection from protocol."""
+
+    def test_https_url(self):
+        assert is_url("https://example.com/page") is True
+
+    def test_http_url(self):
+        assert is_url("http://example.com/page") is True
+
+    def test_plain_text(self):
+        assert is_url("just some text to remember") is False
+
+    def test_file_path(self):
+        assert is_url("/home/user/file.txt") is False
+
+    def test_url_with_whitespace(self):
+        assert is_url("  https://example.com  ") is True
+
+    def test_not_a_url(self):
+        assert is_url("httpstuff is not a url") is False
 
 
 class TestURLTypeDetection(unittest.TestCase):

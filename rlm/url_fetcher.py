@@ -97,6 +97,14 @@ def html_to_text(html: str) -> str:
     return extractor.get_text()
 
 
+# --- URL detection ---
+
+
+def is_url(text: str) -> bool:
+    """Check if a string looks like a URL (has http:// or https:// protocol)."""
+    return text.strip().startswith(("http://", "https://"))
+
+
 # --- URL type detection ---
 
 class URLType:

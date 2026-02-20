@@ -174,72 +174,13 @@ def cmd_finalize(args):
         _print(f"Session {args.session_id} marked as complete")
 
 
-def cmd_remember(args):
-    """Store a new memory entry."""
-    # URL mode: delegate to remember-url logic
-    if getattr(args, "url", None):
-        args_url = type("Args", (), {
-            "url": args.url,
-            "tags": args.tags,
-            "summary": args.summary,
-            "depth": 2,
-        })()
-        cmd_remember_url(args_url)
-        return
-
-    if args.file:
-        try:
-            with open(args.file, "r", errors="replace") as f:
-                content = f.read()
-        except OSError as e:
-            _print(f"Error reading file: {e}")
-            sys.exit(1)
-        source = "file"
-        source_name = args.file
-    elif args.stdin:
-        content = sys.stdin.read()
-        source = "stdin"
-        source_name = None
-    elif args.content:
-        content = args.content
-        source = "text"
-        source_name = None
-    else:
-        _print("Error: Provide content as argument, --file PATH, --url URL, or --stdin")
-        sys.exit(1)
-
-    if not content.strip():
-        _print("Error: Empty content")
-        sys.exit(1)
-
-    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-    result = memory.add_memory(
-        content=content,
-        tags=tags,
-        source=source,
-        source_name=source_name,
-        summary=args.summary,
-    )
-
-    lines = [
-        f"Memory stored: {result['id']}",
-        f"Summary: {result['summary']}",
-        f"Tags: {', '.join(result['tags'])}",
-        f"Size: {result['char_count']:,} chars",
-    ]
-    _print("\n".join(lines))
-
-
-def cmd_remember_url(args):
-    """Fetch content from a URL and store as memory."""
-    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-    depth = getattr(args, "depth", 2)
-
+def _remember_from_url(url, tags, summary, depth=2):
+    """Fetch content from a URL and store as memory. Shared logic."""
     try:
         results = url_fetcher.remember_url(
-            url=args.url,
+            url=url,
             tags=tags,
-            summary=args.summary if hasattr(args, "summary") and args.summary else None,
+            summary=summary,
             depth=depth,
         )
     except ValueError as e:
@@ -262,6 +203,62 @@ def cmd_remember_url(args):
                 f"[{', '.join(r['tags'][:4])}]  ({r['char_count']:,} chars)"
             )
 
+    _print("\n".join(lines))
+
+
+def cmd_remember(args):
+    """Store a new memory entry."""
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+
+    # URL mode: explicit --url flag
+    if getattr(args, "url", None):
+        _remember_from_url(args.url, tags, args.summary, depth=getattr(args, "depth", 2))
+        return
+
+    # URL mode: auto-detect from positional content by protocol
+    if args.content and url_fetcher.is_url(args.content):
+        _remember_from_url(args.content, tags, args.summary, depth=getattr(args, "depth", 2))
+        return
+
+    if args.file:
+        try:
+            with open(args.file, "r", errors="replace") as f:
+                content = f.read()
+        except OSError as e:
+            _print(f"Error reading file: {e}")
+            sys.exit(1)
+        source = "file"
+        source_name = args.file
+    elif args.stdin:
+        content = sys.stdin.read()
+        source = "stdin"
+        source_name = None
+    elif args.content:
+        content = args.content
+        source = "text"
+        source_name = None
+    else:
+        _print("Error: Provide content, a URL, --file PATH, or --stdin")
+        sys.exit(1)
+
+    if not content.strip():
+        _print("Error: Empty content")
+        sys.exit(1)
+
+    result = memory.add_memory(
+        content=content,
+        tags=tags,
+        source=source,
+        source_name=source_name,
+        summary=args.summary,
+    )
+
+    lines = [
+        f"Memory stored: {result['id']}",
+        f"Summary: {result['summary']}",
+        f"Tags: {', '.join(result['tags'])}",
+        f"Size: {result['char_count']:,} chars",
+    ]
     _print("\n".join(lines))
 
 
@@ -531,21 +528,14 @@ def main():
 
     # remember
     p_remember = subparsers.add_parser("remember", help="Store a memory entry")
-    p_remember.add_argument("content", nargs="?", help="Text content to remember")
+    p_remember.add_argument("content", nargs="?", help="Text content or URL to remember")
     p_remember.add_argument("--file", help="File to store as memory")
     p_remember.add_argument("--url", help="URL to fetch and store as memory")
     p_remember.add_argument("--stdin", action="store_true", help="Read from stdin")
     p_remember.add_argument("--tags", help="Comma-separated tags")
     p_remember.add_argument("--summary", help="Short description (auto-generated if omitted)")
+    p_remember.add_argument("--depth", type=int, default=2, help="Directory scan depth for repo URLs (default: 2)")
     p_remember.set_defaults(func=cmd_remember)
-
-    # remember-url
-    p_remember_url = subparsers.add_parser("remember-url", help="Fetch URL content and store as memory")
-    p_remember_url.add_argument("url", help="URL to fetch (web page, GitHub repo, raw file, API spec)")
-    p_remember_url.add_argument("--tags", help="Comma-separated tags")
-    p_remember_url.add_argument("--summary", help="Short description (auto-generated if omitted)")
-    p_remember_url.add_argument("--depth", type=int, default=2, help="Directory scan depth for repos (default: 2)")
-    p_remember_url.set_defaults(func=cmd_remember_url)
 
     # recall
     p_recall = subparsers.add_parser("recall", help="Search memory")
