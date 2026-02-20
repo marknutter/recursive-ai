@@ -15,17 +15,20 @@ metadata:
       - id: rlm
         kind: shell
         label: Install RLM skill
-        script: cd /opt/homebrew/lib/node_modules/openclaw/skills/rlm/rlm-src && uv sync && uv tool install -e .
+        script: cd "$(npm root -g)/openclaw/skills/rlm/rlm-src" && ./install-openclaw.sh
 ---
 
 # RLM: Recursive Language Model Analysis + Memory
 
 You are executing the RLM (Recursive Language Model) algorithm. This technique lets you analyze content far beyond your context window by treating it as external data you inspect programmatically, never loading it directly.
 
-**RLM has TWO modes:**
+**RLM has THREE modes:**
 
 1. **Analysis Mode** (`/rlm "query" path/to/content`) - Analyze codebases, documents, or large files beyond context limits
-2. **Memory Mode** (via MCP tools) - Store and recall knowledge across sessions (persistent memory)
+2. **Recall Mode** (`/rlm "query"` with no path) - Search persistent memory for stored knowledge
+3. **Store Mode** (`/rlm remember "knowledge"`) - Save knowledge for future sessions
+
+Additionally, MCP tools (`rlm_remember`, `rlm_recall`, etc.) are always available for programmatic memory access without the `/rlm` prefix.
 
 ---
 
@@ -67,11 +70,9 @@ rlm result <session_id> --all
 rlm finalize <session_id> --answer "<text>"
 ```
 
-### Step 0: Parse Arguments and Initialize
+### Step 0: Parse Arguments and Route to Correct Mode
 
-The user invoked `/rlm <args>`. Parse the arguments to extract:
-- **query**: The analysis question (in quotes)
-- **target_path**: The file or directory to analyze
+The user invoked `/rlm <args>`. Parse the arguments to determine the mode:
 
 ```
 <user_args>
@@ -79,7 +80,13 @@ The user invoked `/rlm <args>`. Parse the arguments to extract:
 </user_args>
 ```
 
-Parse the quoted query and the path from the args. Then initialize:
+**Routing logic:**
+
+1. If args start with `remember` → **Store Mode** (jump to MODE 3 below)
+2. If args contain a quoted query AND a path → **Analysis Mode** (continue to Step 1)
+3. If args contain only a quoted query with no path → **Recall Mode** (jump to MODE 2 below)
+
+**For Analysis Mode**, extract the query and target_path, then initialize:
 
 ```bash
 rlm init "<query>" "<target_path>"
@@ -262,13 +269,58 @@ Present the final answer directly to the user.
 
 ---
 
-## MODE 2: MEMORY (Persistent Knowledge System)
+## MODE 2: RECALL (Search Persistent Memory)
 
-**RLM includes MCP tools for persistent memory across sessions.** These tools are ALWAYS available (no `/rlm` prefix needed):
+When invoked as `/rlm "query"` (no path), search stored memory and return relevant knowledge.
 
-### Available Tools
+**Workflow:**
 
-#### rlm_remember
+1. Call `rlm_recall` with the user's query
+2. For each relevant result, call `rlm_memory_extract` to get full content
+3. Synthesize and present findings to the user
+4. If nothing relevant is found, say so
+
+```
+Example:
+/rlm "hosting preferences"
+
+1. rlm_recall({ query: "hosting preferences", limit: 5 })
+2. rlm_memory_extract({ entry_id: "<id>" })  -- for each top result
+3. Present: "You prefer Railway for cloud hosting (stored 2026-02-19)..."
+```
+
+---
+
+## MODE 3: STORE (Save Knowledge for Future Sessions)
+
+When invoked as `/rlm remember "knowledge"`, store the provided knowledge in persistent memory.
+
+**Workflow:**
+
+1. Parse the knowledge string from the arguments
+2. Infer appropriate tags from content
+3. Call `rlm_remember` with structured data
+4. Confirm storage to the user
+
+```
+Example:
+/rlm remember "Mark prefers Railway for hosting and dark humor in responses"
+
+→ rlm_remember({
+    content: "Mark prefers Railway for hosting and dark humor in responses.",
+    tags: ["preferences", "infrastructure", "communication"],
+    metadata: { source: "user-explicit", importance: "high" }
+  })
+→ "Stored. Tagged: preferences, infrastructure, communication."
+```
+
+---
+
+## MCP TOOLS REFERENCE (Always Available)
+
+These tools are available in every session without the `/rlm` prefix. Use them proactively during conversations.
+
+### rlm_remember
 **Store knowledge for future recall.**
 
 ```json
@@ -292,7 +344,7 @@ Present the final answer directly to the user.
 - Include relevant tags for future retrieval
 - Add metadata for context (source, date, importance)
 
-#### rlm_recall
+### rlm_recall
 **Search memory for relevant knowledge.**
 
 ```json
@@ -305,7 +357,7 @@ Present the final answer directly to the user.
 **Returns:** Top matching memory entries with similarity scores
 
 **When to use:**
-- At the start of new sessions (check what you know about Mark)
+- At the start of new sessions (check what you know)
 - Before making recommendations (recall relevant preferences)
 - When context is missing ("Did we discuss this before?")
 
@@ -314,7 +366,7 @@ Present the final answer directly to the user.
 - Check recall at session start automatically
 - Combine with memory_search tool for MEMORY.md files
 
-#### rlm_memory_list
+### rlm_memory_list
 **Browse memory entries (most recent first).**
 
 ```json
@@ -329,26 +381,26 @@ Present the final answer directly to the user.
 - Finding entries to update or delete
 - Understanding what you know about a topic
 
-#### rlm_memory_extract
-**Get full content of specific memory entries.**
+### rlm_memory_extract
+**Get full content of a specific memory entry.**
 
 ```json
 {
-  "entry_ids": ["abc123", "def456"]
+  "entry_id": "abc123"
 }
 ```
 
 **When to use:**
-- After `rlm_recall` returns relevant IDs
-- Reviewing specific memories for updates
-- Cross-referencing related entries
+- After `rlm_recall` returns a relevant ID
+- Reviewing a specific memory for updates
+- Cross-referencing related entries (call once per entry)
 
-#### rlm_forget
-**Delete memory entries.**
+### rlm_forget
+**Delete a memory entry.**
 
 ```json
 {
-  "entry_ids": ["abc123"]
+  "entry_id": "abc123"
 }
 ```
 
@@ -357,38 +409,63 @@ Present the final answer directly to the user.
 - Outdated/incorrect information needs removal
 - Cleaning up duplicate entries
 
-### Memory Workflow Example
+---
 
-**Session start:**
-```
-1. rlm_recall("Mark's current projects and priorities")
-2. Review results to understand context
-3. Proceed with informed assistance
-```
+## AUTO-RECALL AT SESSION START
 
-**During conversation:**
+At the beginning of every new session, automatically recall relevant context:
+
 ```
-User: "I hate when AI agents use corporate speak"
-→ rlm_remember({
-    content: "Mark dislikes corporate speak in AI responses. Prefers directness.",
-    tags: ["preferences", "communication"]
-  })
+1. rlm_recall("current projects and priorities")
+2. rlm_recall("user preferences and communication style")
+3. Review results and adjust behavior accordingly
 ```
 
-**Future session:**
-```
-1. rlm_recall("communication preferences")
-2. See stored preference about corporate speak
-3. Adjust tone accordingly without being told again
+This ensures continuity across sessions without the user having to repeat themselves.
+
+---
+
+## HOOKS (Automatic Memory Archiving)
+
+Configure these OpenClaw hooks to automate memory management:
+
+### SessionStart Hook
+**Auto-recall relevant memories when a session begins.**
+
+```json
+{
+  "hook": "SessionStart",
+  "action": "rlm_recall",
+  "params": { "query": "active projects, preferences, recent context", "limit": 10 }
+}
 ```
 
-### Integration with Session Memory
+### SessionEnd Hook
+**Auto-archive session learnings when a session ends.**
+
+At session end, review the conversation for important new knowledge and store it:
+- Decisions made
+- New preferences expressed
+- Problems solved (and solutions)
+- Context that should carry forward
+
+### PreCompact Hook
+**Save critical context before context compaction.**
+
+Before the context window is compacted, extract and store any knowledge that would otherwise be lost:
+- In-progress reasoning or decisions
+- Important details from the current conversation
+- Temporary context the user may need recalled later
+
+---
+
+## INTEGRATION WITH SESSION MEMORY
 
 **RLM memory complements (not replaces) existing memory files:**
 
-- **MEMORY.md** → Long-term curated insights (use `memory_search` tool)
-- **Daily logs** → Chronological session records
-- **RLM memory** → Structured, searchable persistent knowledge
+- **MEMORY.md** - Long-term curated insights (use `memory_search` tool)
+- **Daily logs** - Chronological session records
+- **RLM memory** - Structured, searchable persistent knowledge
 
 **Use RLM memory for:**
 - Quick facts and preferences
@@ -409,8 +486,9 @@ Both systems work together for comprehensive memory.
 **First time setup:**
 
 ```bash
-# Install the skill for OpenClaw
-cd /opt/homebrew/lib/node_modules/openclaw/skills/rlm/rlm-src
+# Clone and install (the install script auto-detects your OpenClaw path)
+git clone https://github.com/marknutter/recursive-ai.git
+cd recursive-ai
 ./install-openclaw.sh
 ```
 
@@ -419,10 +497,15 @@ cd /opt/homebrew/lib/node_modules/openclaw/skills/rlm/rlm-src
 # Install UV if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install RLM
-cd /opt/homebrew/lib/node_modules/openclaw/skills/rlm/rlm-src
+# Install RLM from the cloned repo
+cd recursive-ai
 uv sync
 uv tool install -e .
+```
+
+You can also set `OPENCLAW_SKILLS_DIR` if auto-detection fails:
+```bash
+OPENCLAW_SKILLS_DIR=/path/to/openclaw/skills ./install-openclaw.sh
 ```
 
 **Verify installation:**
@@ -439,10 +522,13 @@ rlm --help
 - You orchestrate, subagents read content
 - Never load target files into your own context
 
-**For persistent memory across sessions:**
-- Use `rlm_remember` to store knowledge
-- Use `rlm_recall` to search memory
-- Use `rlm_memory_list` to browse entries
-- Use `rlm_forget` to delete entries
+**For searching persistent memory:**
+- Use `/rlm "query"` (no path) to search stored knowledge
 
-**Both modes work together** to give you superhuman analysis and perfect memory. 🚀
+**For storing knowledge:**
+- Use `/rlm remember "knowledge"` to save for future sessions
+
+**MCP tools (always available):**
+- `rlm_remember` / `rlm_recall` / `rlm_memory_list` / `rlm_memory_extract` / `rlm_forget`
+
+All three modes work together for analysis beyond context limits and persistent memory across sessions.

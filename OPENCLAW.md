@@ -4,10 +4,10 @@ This branch adds OpenClaw compatibility to the Recursive Language Model (RLM) sk
 
 ## What is RLM?
 
-RLM gives AI agents two superpowers:
+RLM gives AI agents two capabilities:
 
-1. **📊 Analyze codebases beyond context limits** - Recursively analyze large codebases using sub-agent delegation
-2. **🧠 Persistent memory across sessions** - Store and recall knowledge that survives restarts
+1. **Analyze codebases beyond context limits** - Recursively analyze large codebases using sub-agent delegation
+2. **Persistent memory across sessions** - Store and recall knowledge that survives restarts
 
 ## Installation
 
@@ -19,26 +19,16 @@ RLM gives AI agents two superpowers:
 ### Install the Skill
 
 ```bash
-cd /opt/homebrew/lib/node_modules/openclaw/skills/
-sudo mkdir -p rlm
-sudo chown $USER rlm
-cd rlm
-git clone https://github.com/marknutter/recursive-ai.git rlm-src
-cd rlm-src
+# Clone the repo and run the install script (auto-detects OpenClaw path)
+git clone https://github.com/marknutter/recursive-ai.git
+cd recursive-ai
 git checkout openclaw-compatibility
 ./install-openclaw.sh
 ```
 
-**Or manually:**
-
+If the install script cannot find your OpenClaw installation, set the path explicitly:
 ```bash
-# Clone the repo
-git clone https://github.com/marknutter/recursive-ai.git
-cd recursive-ai
-git checkout openclaw-compatibility
-
-# Run install script
-./install-openclaw.sh
+OPENCLAW_SKILLS_DIR=/path/to/openclaw/skills ./install-openclaw.sh
 ```
 
 The install script will:
@@ -114,32 +104,32 @@ rlm_memory_list({
 // Returns: 10 most recent entries tagged "moxmo"
 ```
 
-#### Extract Specific Memories
+#### Extract a Specific Memory
 
 ```javascript
 rlm_memory_extract({
-  entry_ids: ["abc123", "def456"]
+  entry_id: "abc123"
 })
-// Returns: Full content of those memory entries
+// Returns: Full content of that memory entry
 ```
 
-#### Delete Memories
+#### Delete a Memory
 
 ```javascript
 rlm_forget({
-  entry_ids: ["abc123"]
+  entry_id: "abc123"
 })
 ```
 
 **When to use memory:**
 
-✅ **Remember:**
+**Remember:**
 - User preferences and patterns
 - Project decisions and rationale
 - Important facts that should persist
 - Context that spans multiple sessions
 
-✅ **Recall:**
+**Recall:**
 - At session start (what do I know about this user?)
 - Before recommendations (what are their preferences?)
 - When context is missing (did we discuss this before?)
@@ -161,7 +151,7 @@ rlm_forget({
 
 **OpenClaw-specific changes:**
 
-1. **Skill location:** `/opt/homebrew/lib/node_modules/openclaw/skills/rlm/`
+1. **Skill location:** `$(npm root -g)/openclaw/skills/rlm/` (auto-detected)
 2. **CLI access:** Global `rlm` command (via `uv tool install`)
 3. **Sub-agent spawning:** Uses `sessions_spawn` instead of Claude Code's `Task` tool
 4. **MCP tools:** Exposed via OpenClaw's tool system (not MCP servers)
@@ -171,7 +161,7 @@ rlm_forget({
 
 | Feature | Claude Code | OpenClaw |
 |---------|-------------|----------|
-| Skill location | `~/.claude/skills/rlm/` | `/opt/homebrew/lib/node_modules/openclaw/skills/rlm/` |
+| Skill location | `~/.claude/skills/rlm/` | `$(npm root -g)/openclaw/skills/rlm/` (auto-detected) |
 | CLI prefix | `cd <path> && uv run rlm` | Global `rlm` command |
 | Sub-agents | `Task` tool | `sessions_spawn` tool |
 | MCP tools | MCP server (`stdio://rlm`) | Native OpenClaw tools |
@@ -189,7 +179,7 @@ rlm_forget({
 **Update the skill:**
 
 ```bash
-cd /opt/homebrew/lib/node_modules/openclaw/skills/rlm/rlm-src
+cd "$(npm root -g)/openclaw/skills/rlm/rlm-src"
 git pull
 uv sync
 ```
@@ -197,7 +187,7 @@ uv sync
 **Uninstall:**
 
 ```bash
-sudo rm -rf /opt/homebrew/lib/node_modules/openclaw/skills/rlm
+rm -rf "$(npm root -g)/openclaw/skills/rlm"
 uv tool uninstall rlm
 ```
 
