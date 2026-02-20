@@ -1,7 +1,7 @@
 ---
 name: rlm
 description: Recursive analysis, persistent memory recall, and knowledge storage
-argument-hint: "query" [path] | remember "content" [--tags t1,t2]
+argument-hint: "query" [path] | remember "content" [--tags t1,t2] | remember-url "URL" [--tags t1,t2]
 user_invocable: true
 ---
 
@@ -58,7 +58,8 @@ The user invoked `/rlm <args>`. Parse the arguments to determine the mode:
 ```
 
 **Mode detection:**
-- `remember "content"` or `remember --file path` → **Store mode** (jump to [Memory: Store](#memory-store))
+- `remember "content"` or `remember --file path` or `remember --url URL` → **Store mode** (jump to [Memory: Store](#memory-store))
+- `remember-url "URL"` → **Store mode** (URL variant, jump to [Memory: Store](#memory-store))
 - `"query"` with NO path → **Recall mode** (jump to [Memory: Recall](#memory-recall))
 - `"query" path/to/content` → **Analysis mode** (continue to Step 1 below)
 
@@ -472,14 +473,42 @@ Store mode saves content to persistent memory.
 
 Parse the arguments for:
 - **content**: Text to store (in quotes), OR
-- **--file path**: File to store
+- **--file path**: File to store, OR
+- **--url URL**: URL to fetch and store (web page, GitHub repo, raw file, API spec)
 - **--tags tag1,tag2**: Comma-separated tags (always provide)
 - **--summary "..."**: Short description (always provide)
 
 ```bash
 cd __RLM_ROOT__ && uv run rlm remember "content" --tags "tag1,tag2" --summary "short description"
 cd __RLM_ROOT__ && uv run rlm remember --file /path/to/file --tags "tag1,tag2" --summary "short description"
+cd __RLM_ROOT__ && uv run rlm remember --url "https://example.com/docs" --tags "docs,api" --summary "API reference"
 ```
+
+### Storing from URLs
+
+The `remember-url` command (or `remember --url`) fetches content from a URL and stores it in memory. It handles different URL types automatically:
+
+```bash
+# Web page (HTML converted to readable text)
+cd __RLM_ROOT__ && uv run rlm remember-url "https://docs.example.com/api" --tags "api,docs"
+
+# GitHub repository (cloned, README + key files ingested)
+cd __RLM_ROOT__ && uv run rlm remember-url "https://github.com/user/repo" --tags "repo" --depth 3
+
+# GitHub file (fetched via raw.githubusercontent.com)
+cd __RLM_ROOT__ && uv run rlm remember-url "https://github.com/user/repo/blob/main/src/core.py" --tags "source"
+
+# Raw file (JSON, YAML, Markdown, etc.)
+cd __RLM_ROOT__ && uv run rlm remember-url "https://raw.githubusercontent.com/user/repo/main/README.md"
+```
+
+**URL type handling:**
+- **GitHub repos** (`github.com/user/repo`): Shallow clones the repo, creates an overview entry (file tree + README) plus individual entries for key source files. Use `--depth` to control directory scan depth.
+- **GitHub files** (`github.com/user/repo/blob/...`): Converts to raw URL and fetches the file directly.
+- **HTML pages**: Fetches the page, strips HTML markup (scripts, styles, nav, etc.), and stores readable text.
+- **Raw files** (`.md`, `.json`, `.py`, etc.): Fetched and stored as-is.
+
+All URL-sourced entries are automatically tagged with `url-source` and the domain name. GitHub repo entries also get `repo:<name>` and `github` tags.
 
 If the user provides content without explicit tags/summary, generate good ones:
 - **Tags**: 3-6 lowercase keywords covering topic, source type, and key entities

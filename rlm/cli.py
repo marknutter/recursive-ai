@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 
-from rlm import scanner, chunker, extractor, state, memory, export
+from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher
 
 MAX_OUTPUT = 4000
 
@@ -176,6 +176,17 @@ def cmd_finalize(args):
 
 def cmd_remember(args):
     """Store a new memory entry."""
+    # URL mode: delegate to remember-url logic
+    if getattr(args, "url", None):
+        args_url = type("Args", (), {
+            "url": args.url,
+            "tags": args.tags,
+            "summary": args.summary,
+            "depth": 2,
+        })()
+        cmd_remember_url(args_url)
+        return
+
     if args.file:
         try:
             with open(args.file, "r", errors="replace") as f:
@@ -194,7 +205,7 @@ def cmd_remember(args):
         source = "text"
         source_name = None
     else:
-        _print("Error: Provide content as argument, --file PATH, or --stdin")
+        _print("Error: Provide content as argument, --file PATH, --url URL, or --stdin")
         sys.exit(1)
 
     if not content.strip():
@@ -216,6 +227,41 @@ def cmd_remember(args):
         f"Tags: {', '.join(result['tags'])}",
         f"Size: {result['char_count']:,} chars",
     ]
+    _print("\n".join(lines))
+
+
+def cmd_remember_url(args):
+    """Fetch content from a URL and store as memory."""
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    depth = getattr(args, "depth", 2)
+
+    try:
+        results = url_fetcher.remember_url(
+            url=args.url,
+            tags=tags,
+            summary=args.summary if hasattr(args, "summary") and args.summary else None,
+            depth=depth,
+        )
+    except ValueError as e:
+        _print(f"Error: {e}")
+        sys.exit(1)
+
+    if len(results) == 1:
+        r = results[0]
+        lines = [
+            f"Memory stored from URL: {r['id']}",
+            f"Summary: {r['summary']}",
+            f"Tags: {', '.join(r['tags'])}",
+            f"Size: {r['char_count']:,} chars",
+        ]
+    else:
+        lines = [f"Stored {len(results)} entries from URL:\n"]
+        for r in results:
+            lines.append(
+                f"  {r['id']}  {r['summary']}  "
+                f"[{', '.join(r['tags'][:4])}]  ({r['char_count']:,} chars)"
+            )
+
     _print("\n".join(lines))
 
 
@@ -487,10 +533,19 @@ def main():
     p_remember = subparsers.add_parser("remember", help="Store a memory entry")
     p_remember.add_argument("content", nargs="?", help="Text content to remember")
     p_remember.add_argument("--file", help="File to store as memory")
+    p_remember.add_argument("--url", help="URL to fetch and store as memory")
     p_remember.add_argument("--stdin", action="store_true", help="Read from stdin")
     p_remember.add_argument("--tags", help="Comma-separated tags")
     p_remember.add_argument("--summary", help="Short description (auto-generated if omitted)")
     p_remember.set_defaults(func=cmd_remember)
+
+    # remember-url
+    p_remember_url = subparsers.add_parser("remember-url", help="Fetch URL content and store as memory")
+    p_remember_url.add_argument("url", help="URL to fetch (web page, GitHub repo, raw file, API spec)")
+    p_remember_url.add_argument("--tags", help="Comma-separated tags")
+    p_remember_url.add_argument("--summary", help="Short description (auto-generated if omitted)")
+    p_remember_url.add_argument("--depth", type=int, default=2, help="Directory scan depth for repos (default: 2)")
+    p_remember_url.set_defaults(func=cmd_remember_url)
 
     # recall
     p_recall = subparsers.add_parser("recall", help="Search memory")
