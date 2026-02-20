@@ -10,6 +10,7 @@ from rlm.url_fetcher import (
     _build_file_tree,
     _find_and_read_readme,
     _github_file_to_raw_url,
+    _validate_url_safety,
     detect_url_type,
     html_to_text,
     is_url,
@@ -198,6 +199,61 @@ class TestFindReadme(unittest.TestCase):
     def test_returns_none_when_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             assert _find_and_read_readme(tmpdir) is None
+
+
+class TestURLSafetyValidation(unittest.TestCase):
+    """Test private/local IP address rejection."""
+
+    def test_rejects_localhost(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_url_safety("http://localhost/secret")
+        assert "private/local" in str(ctx.exception).lower()
+
+    def test_rejects_127_0_0_1(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_url_safety("http://127.0.0.1/admin")
+        assert "private/local" in str(ctx.exception).lower()
+
+    def test_rejects_no_hostname(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_url_safety("http:///path")
+        assert "no hostname" in str(ctx.exception).lower()
+
+    def test_allows_public_urls(self):
+        # Should not raise for public IPs (DNS resolution may vary in CI,
+        # so we test that well-known public hosts don't raise)
+        try:
+            _validate_url_safety("https://github.com/user/repo")
+        except ValueError as e:
+            # Only fail if it was a private-IP rejection (DNS failure is OK)
+            assert "private/local" not in str(e).lower()
+
+
+class TestPreTagWhitespace(unittest.TestCase):
+    """Test that <pre> blocks preserve whitespace."""
+
+    def test_pre_preserves_indentation(self):
+        html = "<p>Normal text</p><pre>  indented\n    more indented\nno indent</pre>"
+        text = html_to_text(html)
+        assert "  indented" in text
+        assert "    more indented" in text
+
+    def test_pre_preserves_multiple_spaces(self):
+        html = "<pre>a   b   c</pre>"
+        text = html_to_text(html)
+        assert "a   b   c" in text
+
+    def test_normal_text_collapses_whitespace(self):
+        html = "<p>a   b   c</p>"
+        text = html_to_text(html)
+        assert "a b c" in text
+
+    def test_mixed_pre_and_normal(self):
+        html = "<p>  normal  spaces  </p><pre>  preserved  spaces  </pre><p>  more  normal  </p>"
+        text = html_to_text(html)
+        assert "normal spaces" in text
+        assert "  preserved  spaces  " in text
+        assert "more normal" in text
 
 
 if __name__ == "__main__":
