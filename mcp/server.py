@@ -83,6 +83,18 @@ def handle_tool_call(name: str, arguments: dict) -> str:
             cmd += ["--grep", grep, "--context", str(context)]
         return run_rlm(*cmd)
 
+    elif name == "rlm_remember_url":
+        url = arguments.get("url", "")
+        tags = arguments.get("tags", "")
+        summary = arguments.get("summary", "")
+        depth = arguments.get("depth", 2)
+        cmd = ["remember", url, "--depth", str(depth)]
+        if tags:
+            cmd += ["--tags", tags]
+        if summary:
+            cmd += ["--summary", summary]
+        return run_rlm(*cmd)
+
     elif name == "rlm_forget":
         entry_id = arguments.get("entry_id", "")
         return run_rlm("forget", entry_id)
@@ -193,6 +205,39 @@ TOOLS = [
                 },
             },
             "required": ["entry_id"],
+        },
+    },
+    {
+        "name": "rlm_remember_url",
+        "description": (
+            "Fetch content from a URL and store it in RLM persistent memory. "
+            "Supports web pages (HTML converted to text), GitHub repositories "
+            "(cloned and key files ingested), raw files, and API specs. "
+            "For GitHub repos, creates multiple memory entries: one overview "
+            "with README and file tree, plus entries for key source files."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to fetch and remember (web page, GitHub repo, raw file, etc.)",
+                },
+                "tags": {
+                    "type": "string",
+                    "description": "Comma-separated tags for categorization",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Short description (auto-generated if omitted)",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Directory scan depth for GitHub repos (default: 2)",
+                    "default": 2,
+                },
+            },
+            "required": ["url"],
         },
     },
     {

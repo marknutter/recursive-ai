@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 
-from rlm import scanner, chunker, extractor, state, memory, export
+from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher
 
 MAX_OUTPUT = 4000
 
@@ -174,8 +174,52 @@ def cmd_finalize(args):
         _print(f"Session {args.session_id} marked as complete")
 
 
+def _remember_from_url(url, tags, summary, depth=2):
+    """Fetch content from a URL and store as memory. Shared logic."""
+    try:
+        results = url_fetcher.remember_url(
+            url=url,
+            tags=tags,
+            summary=summary,
+            depth=depth,
+        )
+    except ValueError as e:
+        _print(f"Error: {e}")
+        sys.exit(1)
+
+    if len(results) == 1:
+        r = results[0]
+        lines = [
+            f"Memory stored from URL: {r['id']}",
+            f"Summary: {r['summary']}",
+            f"Tags: {', '.join(r['tags'])}",
+            f"Size: {r['char_count']:,} chars",
+        ]
+    else:
+        lines = [f"Stored {len(results)} entries from URL:\n"]
+        for r in results:
+            lines.append(
+                f"  {r['id']}  {r['summary']}  "
+                f"[{', '.join(r['tags'][:4])}]  ({r['char_count']:,} chars)"
+            )
+
+    _print("\n".join(lines))
+
+
 def cmd_remember(args):
     """Store a new memory entry."""
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+
+    # URL mode: explicit --url flag
+    if getattr(args, "url", None):
+        _remember_from_url(args.url, tags, args.summary, depth=getattr(args, "depth", 2))
+        return
+
+    # URL mode: auto-detect from positional content by protocol
+    if args.content and url_fetcher.is_url(args.content):
+        _remember_from_url(args.content, tags, args.summary, depth=getattr(args, "depth", 2))
+        return
+
     if args.file:
         try:
             with open(args.file, "r", errors="replace") as f:
@@ -194,14 +238,13 @@ def cmd_remember(args):
         source = "text"
         source_name = None
     else:
-        _print("Error: Provide content as argument, --file PATH, or --stdin")
+        _print("Error: Provide content, a URL, --file PATH, or --stdin")
         sys.exit(1)
 
     if not content.strip():
         _print("Error: Empty content")
         sys.exit(1)
 
-    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
     result = memory.add_memory(
         content=content,
         tags=tags,
@@ -485,11 +528,13 @@ def main():
 
     # remember
     p_remember = subparsers.add_parser("remember", help="Store a memory entry")
-    p_remember.add_argument("content", nargs="?", help="Text content to remember")
+    p_remember.add_argument("content", nargs="?", help="Text content or URL to remember")
     p_remember.add_argument("--file", help="File to store as memory")
+    p_remember.add_argument("--url", help="URL to fetch and store as memory")
     p_remember.add_argument("--stdin", action="store_true", help="Read from stdin")
     p_remember.add_argument("--tags", help="Comma-separated tags")
     p_remember.add_argument("--summary", help="Short description (auto-generated if omitted)")
+    p_remember.add_argument("--depth", type=int, default=2, help="Directory scan depth for repo URLs (default: 2)")
     p_remember.set_defaults(func=cmd_remember)
 
     # recall
