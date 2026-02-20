@@ -26,7 +26,7 @@ You are executing the RLM (Recursive Language Model) algorithm. This technique l
 
 1. **Analysis Mode** (`/rlm "query" path/to/content`) - Analyze codebases, documents, or large files beyond context limits
 2. **Recall Mode** (`/rlm "query"` with no path) - Search persistent memory for stored knowledge
-3. **Store Mode** (`/rlm remember "knowledge"`) - Save knowledge for future sessions
+3. **Store Mode** (`/rlm remember "knowledge"` or `/rlm remember`) - Save knowledge for future sessions. When called with no text, extracts and stores key knowledge from the current context window.
 
 Additionally, MCP tools (`rlm_remember`, `rlm_recall`, etc.) are always available for programmatic memory access without the `/rlm` prefix.
 
@@ -82,9 +82,10 @@ The user invoked `/rlm <args>`. Parse the arguments to determine the mode:
 
 **Routing logic:**
 
-1. If args start with `remember` → **Store Mode** (jump to MODE 3 below)
-2. If args contain a quoted query AND a path → **Analysis Mode** (continue to Step 1)
-3. If args contain only a quoted query with no path → **Recall Mode** (jump to MODE 2 below)
+1. If args are exactly `remember` (no additional text) → **Store Mode: Context Snapshot** (jump to MODE 3 below)
+2. If args start with `remember` followed by text → **Store Mode: Explicit** (jump to MODE 3 below)
+3. If args contain a quoted query AND a path → **Analysis Mode** (continue to Step 1)
+4. If args contain only a quoted query with no path → **Recall Mode** (jump to MODE 2 below)
 
 **For Analysis Mode**, extract the query and target_path, then initialize:
 
@@ -293,7 +294,9 @@ Example:
 
 ## MODE 3: STORE (Save Knowledge for Future Sessions)
 
-When invoked as `/rlm remember "knowledge"`, store the provided knowledge in persistent memory.
+### Explicit Store: `/rlm remember "knowledge"`
+
+When invoked with explicit text, store that knowledge directly.
 
 **Workflow:**
 
@@ -313,6 +316,52 @@ Example:
   })
 → "Stored. Tagged: preferences, infrastructure, communication."
 ```
+
+### Context Snapshot: `/rlm remember`
+
+When invoked with no arguments, extract and store key knowledge from the current context window. This is useful before starting a new topic, when context is getting long, or anytime you want to checkpoint what's been learned.
+
+**Workflow:**
+
+1. Review the full conversation in the current context window
+2. Identify knowledge worth persisting — skip transient/mechanical content (tool outputs, debugging steps, file listings). Focus on:
+   - **Decisions made** and their rationale
+   - **User preferences** or corrections expressed
+   - **Architectural insights** or patterns discovered
+   - **Solutions** to problems that were non-obvious
+   - **Facts learned** about the codebase, project, or domain
+3. For each distinct piece of knowledge, call `rlm_remember` with appropriate tags and metadata
+4. Report a summary of what was stored
+
+```
+Example:
+/rlm remember
+
+→ Reviewing current context window...
+→ Found 4 pieces of knowledge worth persisting:
+
+  1. rlm_remember({
+       content: "OpenClaw hooks use event format type:action (e.g. command:new, agent:bootstrap). The bundled session-memory hook fires on command:new. preCompaction is proposed but not yet available.",
+       tags: ["openclaw", "hooks", "architecture"],
+       metadata: { source: "research-session", importance: "high" }
+     })
+
+  2. rlm_remember({
+       content: "RLM has no bulk/batch API for storing memories. Each entry must be stored individually via rlm_remember.",
+       tags: ["rlm", "api", "limitations"],
+       metadata: { source: "research-session", importance: "medium" }
+     })
+
+  ... (2 more)
+
+→ "Stored 4 entries from current context."
+```
+
+**What NOT to store:**
+- Raw file contents or code listings (use Analysis Mode for that)
+- Transient debugging state ("tried X, got error Y")
+- Information already stored in previous `rlm_remember` calls this session
+- Obvious or trivially re-discoverable facts
 
 ---
 
@@ -549,7 +598,8 @@ rlm --help
 - Use `/rlm "query"` (no path) to search stored knowledge
 
 **For storing knowledge:**
-- Use `/rlm remember "knowledge"` to save for future sessions
+- Use `/rlm remember "knowledge"` to save specific knowledge
+- Use `/rlm remember` (no text) to extract and store key knowledge from the current context window
 
 **MCP tools (always available):**
 - `rlm_remember` / `rlm_recall` / `rlm_memory_list` / `rlm_memory_extract` / `rlm_forget`
