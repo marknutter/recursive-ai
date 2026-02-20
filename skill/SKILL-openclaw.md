@@ -427,35 +427,58 @@ This ensures continuity across sessions without the user having to repeat themse
 
 ## HOOKS (Automatic Memory Archiving)
 
-Configure these OpenClaw hooks to automate memory management:
+OpenClaw hooks automate memory management via its event system. Hooks are discovered from `~/.openclaw/hooks/` or your workspace hooks directory.
 
-### SessionStart Hook
-**Auto-recall relevant memories when a session begins.**
+### `agent:bootstrap` -- Auto-recall at session start
+**Inject recalled memories into agent context during bootstrap.**
 
+Create a hook that fires on `agent:bootstrap` to automatically recall relevant RLM memories and include them in the agent's initial context:
+
+```typescript
+// handler.ts
+import type { HookHandler } from "openclaw";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "agent" || event.action !== "bootstrap") return;
+  // Call rlm_recall to fetch relevant context
+  // Inject results into bootstrap context
+};
+export default handler;
+```
+
+### `command:new` -- Auto-archive on session end
+**Save session learnings when `/new` starts a fresh session.**
+
+OpenClaw's bundled `session-memory` hook already saves transcripts to `<workspace>/memory/` on `command:new`. To also store structured knowledge in RLM memory, create a companion hook:
+
+```typescript
+// handler.ts
+import type { HookHandler } from "openclaw";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "command" || event.action !== "new") return;
+  // Read previous session transcript from event.context.previousSessionEntry
+  // Extract key learnings (decisions, preferences, solutions)
+  // Call rlm_remember for each piece of knowledge
+};
+export default handler;
+```
+
+Enable alongside the bundled hook in `~/.openclaw/config.json`:
 ```json
 {
-  "hook": "SessionStart",
-  "action": "rlm_recall",
-  "params": { "query": "active projects, preferences, recent context", "limit": 10 }
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": { "enabled": true },
+        "rlm-session-archive": { "enabled": true }
+      }
+    }
+  }
 }
 ```
 
-### SessionEnd Hook
-**Auto-archive session learnings when a session ends.**
-
-At session end, review the conversation for important new knowledge and store it:
-- Decisions made
-- New preferences expressed
-- Problems solved (and solutions)
-- Context that should carry forward
-
-### PreCompact Hook
-**Save critical context before context compaction.**
-
-Before the context window is compacted, extract and store any knowledge that would otherwise be lost:
-- In-progress reasoning or decisions
-- Important details from the current conversation
-- Temporary context the user may need recalled later
+**Note:** A `preCompaction` lifecycle hook has been proposed but is not yet available in OpenClaw. Until then, rely on `command:new` for archiving and `agent:bootstrap` for recall.
 
 ---
 
