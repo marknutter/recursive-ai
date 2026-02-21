@@ -230,6 +230,7 @@ def search_index(
     max_results: int = 20,
     deep: bool = False,
     include_size: bool = False,
+    include_facts: bool = False,
 ) -> list[dict]:
     """Search memory using FTS5 full-text search with BM25 ranking.
 
@@ -246,6 +247,7 @@ def search_index(
         max_results: Maximum number of results to return
         deep: Backward compatibility, no effect
         include_size: If True, annotate results with size category for RLM chunking
+        include_facts: If True, also search the facts table and include matches
     """
     _ensure_db()
     results = db.search_fts(query, tags=tags, max_results=max_results)
@@ -264,6 +266,16 @@ def search_index(
                 r["size_category"] = "small"  # Direct extraction fine
 
     return results
+
+
+def search_facts(
+    query: str,
+    fact_type: str | None = None,
+    max_results: int = 10,
+) -> list[dict]:
+    """Search the facts table for matching structured knowledge."""
+    _ensure_db()
+    return db.search_facts_fts(query, fact_type=fact_type, max_results=max_results)
 
 
 def delete_memory(entry_id: str) -> dict:

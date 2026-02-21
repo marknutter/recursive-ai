@@ -98,6 +98,57 @@ def _init_schema(conn: sqlite3.Connection):
             VALUES (new.rowid, new.summary, new.tags, new.content);
         END;
     """)
+    # --- Facts table (structured knowledge extracted from episodes) ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS facts (
+            id TEXT PRIMARY KEY,
+            fact_text TEXT NOT NULL,
+            source_entry_id TEXT NOT NULL,
+            entity TEXT,
+            fact_type TEXT NOT NULL DEFAULT 'observation',
+            confidence REAL NOT NULL DEFAULT 1.0,
+            created_at REAL NOT NULL,
+            superseded_by TEXT,
+            FOREIGN KEY (source_entry_id) REFERENCES entries(id)
+        )
+    """)
+
+    # FTS5 for facts
+    facts_fts_exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='facts_fts'"
+    ).fetchone()
+
+    if not facts_fts_exists:
+        conn.execute("""
+            CREATE VIRTUAL TABLE facts_fts USING fts5(
+                fact_text,
+                entity,
+                fact_type,
+                content='facts',
+                content_rowid='rowid',
+                tokenize='porter unicode61'
+            )
+        """)
+
+    conn.executescript("""
+        CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+            INSERT INTO facts_fts(rowid, fact_text, entity, fact_type)
+            VALUES (new.rowid, new.fact_text, new.entity, new.fact_type);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+            INSERT INTO facts_fts(facts_fts, rowid, fact_text, entity, fact_type)
+            VALUES ('delete', old.rowid, old.fact_text, old.entity, old.fact_type);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+            INSERT INTO facts_fts(facts_fts, rowid, fact_text, entity, fact_type)
+            VALUES ('delete', old.rowid, old.fact_text, old.entity, old.fact_type);
+            INSERT INTO facts_fts(rowid, fact_text, entity, fact_type)
+            VALUES (new.rowid, new.fact_text, new.entity, new.fact_type);
+        END;
+    """)
+
     conn.commit()
 
 
@@ -492,6 +543,189 @@ def rebuild_fts_index() -> None:
     conn.commit()
 
 
+# --- Facts operations ---
+
+
+def insert_fact(
+    fact_id: str,
+    fact_text: str,
+    source_entry_id: str,
+    entity: str | None,
+    fact_type: str,
+    confidence: float,
+    created_at: float,
+    auto_commit: bool = True,
+) -> None:
+    """Insert a new fact."""
+    conn = _get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO facts
+           (id, fact_text, source_entry_id, entity, fact_type, confidence, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (fact_id, fact_text, source_entry_id, entity, fact_type, confidence, created_at),
+    )
+    if auto_commit:
+        conn.commit()
+
+
+def search_facts_fts(
+    query: str,
+    fact_type: str | None = None,
+    max_results: int = 20,
+    include_superseded: bool = False,
+) -> list[dict]:
+    """Full-text search across facts with BM25 ranking.
+
+    Returns only active (non-superseded) facts by default.
+    """
+    conn = _get_conn()
+    match_expr = _build_match_expr(query)
+    if not match_expr:
+        return []
+
+    where_clauses = ["facts_fts MATCH ?"]
+    params: list = [match_expr]
+
+    if not include_superseded:
+        where_clauses.append("f.superseded_by IS NULL")
+
+    if fact_type:
+        where_clauses.append("f.fact_type = ?")
+        params.append(fact_type)
+
+    where_sql = " AND ".join(where_clauses)
+    params.append(max_results)
+
+    sql = f"""
+        SELECT f.id, f.fact_text, f.source_entry_id, f.entity,
+               f.fact_type, f.confidence, f.created_at, f.superseded_by,
+               bm25(facts_fts, 3.0, 2.0, 1.0) AS rank
+        FROM facts_fts fts
+        JOIN facts f ON f.rowid = fts.rowid
+        WHERE {where_sql}
+        ORDER BY rank
+        LIMIT ?
+    """
+
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        simple_expr = _build_simple_match(query)
+        if not simple_expr:
+            return []
+        params[0] = simple_expr
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    return [_fact_row_to_dict(row) for row in rows]
+
+
+def list_facts(
+    source_entry_id: str | None = None,
+    fact_type: str | None = None,
+    entity: str | None = None,
+    include_superseded: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """List facts with optional filtering."""
+    conn = _get_conn()
+
+    where_clauses = []
+    params: list = []
+
+    if source_entry_id:
+        where_clauses.append("source_entry_id = ?")
+        params.append(source_entry_id)
+    if fact_type:
+        where_clauses.append("fact_type = ?")
+        params.append(fact_type)
+    if entity:
+        where_clauses.append("LOWER(entity) = LOWER(?)")
+        params.append(entity)
+    if not include_superseded:
+        where_clauses.append("superseded_by IS NULL")
+
+    where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM facts{where_sql}", params
+    ).fetchone()[0]
+
+    rows = conn.execute(
+        f"""SELECT id, fact_text, source_entry_id, entity, fact_type,
+                   confidence, created_at, superseded_by
+            FROM facts{where_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?""",
+        params + [limit, offset],
+    ).fetchall()
+
+    return [_fact_row_to_dict(row) for row in rows], total
+
+
+def supersede_fact(old_fact_id: str, new_fact_id: str) -> bool:
+    """Mark an old fact as superseded by a new one."""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "UPDATE facts SET superseded_by = ? WHERE id = ? AND superseded_by IS NULL",
+        (new_fact_id, old_fact_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def delete_fact(fact_id: str) -> bool:
+    """Delete a single fact."""
+    conn = _get_conn()
+    cursor = conn.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def delete_facts_for_entry(entry_id: str) -> int:
+    """Delete all facts linked to a given source entry. Returns count deleted."""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "DELETE FROM facts WHERE source_entry_id = ?", (entry_id,)
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def count_facts() -> int:
+    """Return total number of facts."""
+    conn = _get_conn()
+    return conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+
+
+def find_facts_by_entity(entity: str, fact_type: str | None = None) -> list[dict]:
+    """Find active facts for a given entity (for contradiction detection)."""
+    conn = _get_conn()
+    if fact_type:
+        rows = conn.execute(
+            """SELECT id, fact_text, source_entry_id, entity, fact_type,
+                      confidence, created_at, superseded_by
+               FROM facts
+               WHERE LOWER(entity) = LOWER(?) AND fact_type = ?
+                 AND superseded_by IS NULL
+               ORDER BY created_at DESC""",
+            (entity, fact_type),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT id, fact_text, source_entry_id, entity, fact_type,
+                      confidence, created_at, superseded_by
+               FROM facts
+               WHERE LOWER(entity) = LOWER(?) AND superseded_by IS NULL
+               ORDER BY created_at DESC""",
+            (entity,),
+        ).fetchall()
+    return [_fact_row_to_dict(row) for row in rows]
+
+
 # --- Internal helpers ---
 
 
@@ -538,4 +772,13 @@ def _row_to_index_dict(row: sqlite3.Row) -> dict:
     d.pop("content", None)
     d.pop("chunks", None)
     d.pop("rank", None)
+    return d
+
+
+def _fact_row_to_dict(row: sqlite3.Row) -> dict:
+    """Convert a facts table row to a dict."""
+    d = dict(row)
+    # Add score from BM25 rank if present
+    if "rank" in d:
+        d["score"] = round(-d.pop("rank"), 2)
     return d

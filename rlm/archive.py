@@ -179,6 +179,25 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     )
     log(hook_name, f"  Transcript: {len(transcript):,} chars")
 
+    # Step 6: Extract structured facts from transcript
+    log(hook_name, "Extracting structured facts...")
+    try:
+        from rlm.facts import extract_facts_from_transcript, store_facts
+
+        # Use the summary entry ID as the source link
+        # (facts relate to the session, linked via the summary entry)
+        raw_facts = extract_facts_from_transcript(
+            transcript, source_entry_id=session_id,
+        )
+        if raw_facts:
+            stored_count = store_facts(raw_facts)
+            log(hook_name, f"  Facts: {stored_count} extracted and stored")
+        else:
+            log(hook_name, "  Facts: none extracted")
+    except Exception as e:
+        # Fact extraction is non-critical — don't fail archival
+        log(hook_name, f"  Facts extraction failed (non-fatal): {e}")
+
     log(hook_name, f"Archived to ~/.rlm/memory/ (session: {session_id})")
 
     # Update marker with current file size
