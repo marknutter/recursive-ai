@@ -157,13 +157,14 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     summary_tags_str = combine_tags(f"summary,session-summary,{all_tags}", [])
     summary_tags_list = [t.strip() for t in summary_tags_str.split(",") if t.strip()]
     summary_label = f"Session summary: {project_name} on {timestamp}"
-    memory.add_memory(
+    summary_result = memory.add_memory(
         content=summary_text,
         tags=summary_tags_list,
         source="session-summary",
         source_name=session_filename,
         summary=summary_label,
     )
+    summary_entry_id = summary_result["id"]
     log(hook_name, f"  Summary: {len(summary_text):,} chars")
 
     # Step 5: Store full transcript (larger, for drill-down)
@@ -178,6 +179,24 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
         summary=transcript_label,
     )
     log(hook_name, f"  Transcript: {len(transcript):,} chars")
+
+    # Step 6: Extract structured facts from transcript
+    log(hook_name, "Extracting structured facts...")
+    try:
+        from rlm.facts import extract_facts_from_transcript, store_facts
+
+        # Link facts to the summary entry (the primary search target)
+        raw_facts = extract_facts_from_transcript(
+            transcript, source_entry_id=summary_entry_id,
+        )
+        if raw_facts:
+            stored_count = store_facts(raw_facts)
+            log(hook_name, f"  Facts: {stored_count} extracted and stored")
+        else:
+            log(hook_name, "  Facts: none extracted")
+    except Exception as e:
+        # Fact extraction is non-critical — don't fail archival
+        log(hook_name, f"  Facts extraction failed (non-fatal): {e}")
 
     log(hook_name, f"Archived to ~/.rlm/memory/ (session: {session_id})")
 

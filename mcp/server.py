@@ -50,6 +50,7 @@ def handle_tool_call(name: str, arguments: dict) -> str:
         query = arguments.get("query", "")
         tags = arguments.get("tags", "")
         max_results = arguments.get("max_results", 10)
+        # recall now includes facts automatically
         cmd = ["recall", query, "--deep", "--max", str(max_results)]
         if tags:
             cmd += ["--tags", tags]

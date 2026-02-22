@@ -267,6 +267,7 @@ def cmd_recall(args):
 
     For large matches (>10KB), the output includes size annotations
     to guide RLM-powered recall via the /rlm skill.
+    Also searches the facts table for matching structured knowledge.
     """
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
     results = memory.search_index(
@@ -274,10 +275,34 @@ def cmd_recall(args):
         include_size=True,  # Annotate with size categories
     )
 
+    # Also search facts
+    fact_results = memory.search_facts(args.query, max_results=5)
+
+    # Build output: facts first (if any), then episodes
+    parts = []
+
+    if fact_results:
+        from rlm.facts import format_facts
+        parts.append("## Relevant Facts\n")
+        for f in fact_results:
+            entity = f.get("entity") or "—"
+            parts.append(
+                f"  [{f['fact_type']}] {f['fact_text']}  "
+                f"(entity: {entity}, conf: {f.get('confidence', 0):.0%})"
+            )
+        parts.append("")
+
     # Check if any results need RLM chunking
     large_results = [r for r in results if r.get("size_category") in ("large", "huge")]
 
-    output = memory.format_search_results(results)
+    if results:
+        if fact_results:
+            parts.append("## Related Episodes\n")
+        parts.append(memory.format_search_results(results))
+    elif not fact_results:
+        parts.append("No matching memories or facts found.")
+
+    output = "\n".join(parts)
 
     # Add guidance for large memories
     if large_results:
@@ -341,6 +366,64 @@ def cmd_forget(args):
         _print(f"Error: {result['error']}")
         sys.exit(1)
     _print(f"Deleted: {result['id']}")
+
+
+def cmd_facts(args):
+    """List, search, or manage extracted facts."""
+    from rlm import db, facts as facts_mod
+
+    memory.init_memory_store()
+
+    if args.facts_action == "search":
+        if not args.query:
+            _print("Error: --query is required for search")
+            sys.exit(1)
+        results = db.search_facts_fts(
+            args.query,
+            fact_type=args.type,
+            max_results=args.max,
+        )
+        _print(facts_mod.format_facts(results))
+
+    elif args.facts_action == "list":
+        results, total = db.list_facts(
+            fact_type=args.type,
+            entity=args.entity,
+            include_superseded=args.all,
+            limit=args.max,
+        )
+        if not results:
+            _print("No facts found.")
+            return
+        header = f"Facts: {total} total"
+        if len(results) < total:
+            header += f" (showing {len(results)})"
+        _print(header + "\n")
+        _print(facts_mod.format_facts(results))
+
+    elif args.facts_action == "stats":
+        total = db.count_facts()
+        active, _ = db.list_facts(include_superseded=False, limit=0)
+        # count by type
+        type_counts = {}
+        all_facts, _ = db.list_facts(include_superseded=False, limit=99999)
+        for f in all_facts:
+            ft = f.get("fact_type", "unknown")
+            type_counts[ft] = type_counts.get(ft, 0) + 1
+
+        lines = [
+            f"Total facts: {total}",
+            f"Active (non-superseded): {len(all_facts)}",
+            "",
+        ]
+        if type_counts:
+            lines.append("By type:")
+            for ft, cnt in sorted(type_counts.items(), key=lambda x: -x[1]):
+                lines.append(f"  {ft:<16} {cnt}")
+
+        _print("\n".join(lines))
+    else:
+        _print("Unknown facts action. Use: search, list, stats")
 
 
 def cmd_strategy(args):
@@ -568,6 +651,17 @@ def main():
     p_forget = subparsers.add_parser("forget", help="Delete a memory entry")
     p_forget.add_argument("entry_id", help="Memory entry ID to delete")
     p_forget.set_defaults(func=cmd_forget)
+
+    # facts
+    p_facts = subparsers.add_parser("facts", help="List, search, or manage extracted facts")
+    p_facts.add_argument("facts_action", choices=["search", "list", "stats"],
+                         help="search=FTS search, list=browse, stats=overview")
+    p_facts.add_argument("--query", help="Search query (required for search)")
+    p_facts.add_argument("--type", help="Filter by fact type (decision, preference, etc.)")
+    p_facts.add_argument("--entity", help="Filter by entity")
+    p_facts.add_argument("--max", type=int, default=20, help="Max results")
+    p_facts.add_argument("--all", action="store_true", help="Include superseded facts")
+    p_facts.set_defaults(func=cmd_facts)
 
     # strategy
     p_strategy = subparsers.add_parser("strategy", help="Manage recall strategies")
