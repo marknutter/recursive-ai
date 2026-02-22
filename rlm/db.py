@@ -109,7 +109,7 @@ def _init_schema(conn: sqlite3.Connection):
             confidence REAL NOT NULL DEFAULT 1.0,
             created_at REAL NOT NULL,
             superseded_by TEXT,
-            FOREIGN KEY (source_entry_id) REFERENCES entries(id)
+            FOREIGN KEY (source_entry_id) REFERENCES entries(id) ON DELETE CASCADE
         )
     """)
 

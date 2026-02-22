@@ -157,13 +157,14 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     summary_tags_str = combine_tags(f"summary,session-summary,{all_tags}", [])
     summary_tags_list = [t.strip() for t in summary_tags_str.split(",") if t.strip()]
     summary_label = f"Session summary: {project_name} on {timestamp}"
-    memory.add_memory(
+    summary_result = memory.add_memory(
         content=summary_text,
         tags=summary_tags_list,
         source="session-summary",
         source_name=session_filename,
         summary=summary_label,
     )
+    summary_entry_id = summary_result["id"]
     log(hook_name, f"  Summary: {len(summary_text):,} chars")
 
     # Step 5: Store full transcript (larger, for drill-down)
@@ -184,10 +185,9 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     try:
         from rlm.facts import extract_facts_from_transcript, store_facts
 
-        # Use the summary entry ID as the source link
-        # (facts relate to the session, linked via the summary entry)
+        # Link facts to the summary entry (the primary search target)
         raw_facts = extract_facts_from_transcript(
-            transcript, source_entry_id=session_id,
+            transcript, source_entry_id=summary_entry_id,
         )
         if raw_facts:
             stored_count = store_facts(raw_facts)
