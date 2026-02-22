@@ -6,10 +6,12 @@ and prepares it for storage in the RLM memory system.
 Uses only Python stdlib (urllib, html.parser) to keep dependencies minimal.
 """
 
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 from html.parser import HTMLParser
@@ -23,6 +25,37 @@ MAX_CONTENT_BYTES = 512_000  # 500KB per page
 MAX_REPO_FILES = 50  # Max files to ingest from a repo
 REQUEST_TIMEOUT = 30  # seconds
 USER_AGENT = "RLM/0.1 (Recursive Language Model memory ingestion)"
+
+
+def _validate_url_safety(url: str) -> None:
+    """Reject URLs pointing to private/local network addresses (SSRF protection).
+
+    Raises ValueError if the URL targets a private, loopback, or link-local address.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"Invalid URL (no hostname): {url}")
+
+    # Resolve hostname to IP(s) and check each one
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        # Can't resolve — let the actual fetch handle the error
+        return
+
+    for family, _, _, _, sockaddr in addr_infos:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError(
+                f"Refusing to fetch URL targeting private/local address: "
+                f"{hostname} resolves to {ip_str}"
+            )
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -46,7 +79,7 @@ class _HTMLTextExtractor(HTMLParser):
         # Block-level tags get line breaks
         if tag in ("p", "div", "br", "h1", "h2", "h3", "h4", "h5", "h6",
                     "li", "tr", "blockquote", "section", "article"):
-            self._pieces.append("\n")
+            self._pieces.append(("text", "\n"))
 
     def handle_endtag(self, tag):
         tag = tag.lower()
@@ -56,38 +89,65 @@ class _HTMLTextExtractor(HTMLParser):
             self._in_pre = False
         if tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
                     "blockquote", "section", "article"):
-            self._pieces.append("\n")
+            self._pieces.append(("text", "\n"))
 
     def handle_data(self, data):
         if self._skip_depth > 0:
             return
         if self._in_pre:
-            self._pieces.append(data)
+            # Preserve whitespace exactly in <pre> blocks
+            self._pieces.append(("\x00PRE\x00", data))
         else:
-            self._pieces.append(data)
+            self._pieces.append(("text", data))
 
     def get_text(self) -> str:
-        raw = "".join(self._pieces)
-        # Collapse whitespace runs (but preserve intentional newlines)
-        lines = raw.splitlines()
-        cleaned = []
-        for line in lines:
-            stripped = " ".join(line.split())
-            cleaned.append(stripped)
-
-        # Collapse multiple blank lines
-        result = []
-        prev_blank = False
-        for line in cleaned:
-            if not line:
-                if not prev_blank:
-                    result.append("")
-                prev_blank = True
+        # First pass: join pieces, collapsing whitespace outside <pre> blocks
+        parts = []
+        for kind, data in self._pieces:
+            if isinstance(kind, str) and kind == "\x00PRE\x00":
+                parts.append(data)
             else:
-                result.append(line)
-                prev_blank = False
+                parts.append(data)
 
-        return "\n".join(result).strip()
+        raw = "".join(parts)
+
+        # Re-process: split by pre markers for selective whitespace collapsing
+        # Simpler approach: rebuild from pieces with selective collapsing
+        segments = []
+        current_text = []
+        for kind, data in self._pieces:
+            if kind == "\x00PRE\x00":
+                # Flush any accumulated normal text with collapsing
+                if current_text:
+                    segments.append(_collapse_whitespace("".join(current_text)))
+                    current_text = []
+                # Add pre content as-is
+                segments.append(data)
+            else:
+                current_text.append(data)
+
+        if current_text:
+            segments.append(_collapse_whitespace("".join(current_text)))
+
+        return "".join(segments).strip()
+
+
+def _collapse_whitespace(text: str) -> str:
+    """Collapse whitespace runs in text, preserving newlines and removing blank line runs."""
+    lines = text.splitlines()
+    cleaned = [" ".join(line.split()) for line in lines]
+
+    result = []
+    prev_blank = False
+    for line in cleaned:
+        if not line:
+            if not prev_blank:
+                result.append("")
+            prev_blank = True
+        else:
+            result.append(line)
+            prev_blank = False
+    return "\n".join(result)
 
 
 def html_to_text(html: str) -> str:
@@ -166,6 +226,8 @@ def fetch_url(url: str) -> tuple[str, str]:
         url = _github_file_to_raw_url(url)
         url_type = URLType.RAW_FILE
 
+    _validate_url_safety(url)
+
     req = Request(url, headers={"User-Agent": USER_AGENT})
 
     try:
@@ -186,9 +248,27 @@ def fetch_url(url: str) -> tuple[str, str]:
                 return text, "text"
 
     except HTTPError as e:
-        raise ValueError(f"HTTP error fetching {url}: {e.code} {e.reason}") from e
+        hints = {
+            403: "The server blocked the request. It may require authentication or rate-limit automated access.",
+            404: "Page not found. Check the URL for typos or try the site's main page.",
+            429: "Rate limited. Wait a few minutes and try again.",
+            500: "Server error. The site may be temporarily down — try again later.",
+            503: "Service unavailable. The site may be under maintenance — try again later.",
+        }
+        hint = hints.get(e.code, "")
+        msg = f"HTTP {e.code} fetching {url}"
+        if hint:
+            msg += f". {hint}"
+        raise ValueError(msg) from e
     except URLError as e:
-        raise ValueError(f"URL error fetching {url}: {e.reason}") from e
+        reason = str(e.reason)
+        if "timed out" in reason.lower() or "timeout" in reason.lower():
+            msg = f"Timeout fetching {url} (waited {REQUEST_TIMEOUT}s). The site may be slow — try again later."
+        elif "refused" in reason.lower():
+            msg = f"Connection refused for {url}. The server may be down."
+        else:
+            msg = f"Could not connect to {url}: {reason}"
+        raise ValueError(msg) from e
     except Exception as e:
         raise ValueError(f"Error fetching {url}: {e}") from e
 
@@ -452,8 +532,12 @@ def remember_url(
         all_tags = user_tags + ["url-source", domain]
 
         if summary is None:
-            # Use first line of content as summary hint
-            summary = None  # let memory.add_memory auto-generate
+            # Generate a useful default from the URL
+            path_hint = parsed.path.strip("/").split("/")[-1] if parsed.path.strip("/") else ""
+            if path_hint:
+                summary = f"{domain}/{path_hint}"[:80]
+            else:
+                summary = f"Content from {domain}"[:80]
 
         result = memory.add_memory(
             content=content,
