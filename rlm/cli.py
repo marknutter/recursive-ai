@@ -5,9 +5,10 @@ All stdout is capped at 4000 chars with truncation notice.
 
 import argparse
 import json
+import os
 import sys
 
-from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher
+from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher, archive
 
 MAX_OUTPUT = 4000
 
@@ -238,8 +239,17 @@ def cmd_remember(args):
         source = "text"
         source_name = None
     else:
-        _print("Error: Provide content, a URL, --file PATH, or --stdin")
-        sys.exit(1)
+        # No args: archive the current active Claude Code session
+        session_file = archive.get_session_file()
+        if session_file is None:
+            _print("Error: No active Claude Code session found. Provide content, a URL, --file PATH, or --stdin")
+            sys.exit(1)
+        result = archive.archive_session(session_file, hook_name="Manual", cwd=os.getcwd())
+        if result:
+            _print(f"Session archived: {session_file.name}")
+        else:
+            _print(f"Session already archived (unchanged): {session_file.name}")
+        return
 
     if not content.strip():
         _print("Error: Empty content")
