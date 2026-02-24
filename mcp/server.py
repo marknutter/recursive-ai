@@ -60,6 +60,9 @@ def handle_tool_call(name: str, arguments: dict) -> str:
         content = arguments.get("content", "")
         tags = arguments.get("tags", "")
         summary = arguments.get("summary", "")
+        if not content:
+            # No content: archive the current active session
+            return run_rlm("remember")
         cmd = ["remember", content]
         if tags:
             cmd += ["--tags", tags]
@@ -140,14 +143,15 @@ TOOLS = [
         "description": (
             "Store a piece of knowledge or decision in RLM persistent memory for future recall. "
             "Use this to save important findings, architectural decisions, or context that "
-            "should survive across sessions. Provide descriptive tags and a clear summary."
+            "should survive across sessions. Provide descriptive tags and a clear summary. "
+            "If called with no content, archives the current active Claude Code session on demand."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The content to store in memory",
+                    "description": "The content to store in memory. If omitted, archives the current active session.",
                 },
                 "tags": {
                     "type": "string",
@@ -158,7 +162,7 @@ TOOLS = [
                     "description": "Short description of what this memory contains (under 80 chars)",
                 },
             },
-            "required": ["content"],
+            "required": [],
         },
     },
     {
