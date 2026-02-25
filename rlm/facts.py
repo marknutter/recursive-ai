@@ -155,7 +155,7 @@ def _extract_via_llm(transcript: str) -> list[dict] | None:
         # Approach 1: Claude CLI
         try:
             result = subprocess.run(
-                ["claude", "--no-conversation"],
+                ["claude", "-p"],
                 input=prompt,
                 capture_output=True,
                 text=True,
