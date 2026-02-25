@@ -16,11 +16,14 @@ db_mod.DB_PATH = os.path.join(_test_db_dir, "memory.db")
 
 from rlm import db
 from rlm.facts import (
+    DEDUP_SIMILARITY_THRESHOLD,
     EXTRACTION_PROMPT,
     MIN_CONFIDENCE,
     STOPWORDS,
     _clean_entity,
     _extract_fallback,
+    _jaccard_similarity,
+    _normalize_tokens,
     _parse_llm_response,
     extract_facts_from_transcript,
     format_facts,
@@ -331,6 +334,253 @@ class TestStoreFactsWithContradiction(unittest.TestCase):
         # Both should exist when including superseded
         all_facts, _ = db.list_facts(include_superseded=True)
         assert len(all_facts) == 2
+
+
+class TestNormalizeTokens(unittest.TestCase):
+    """Test text normalization for deduplication."""
+
+    def test_lowercases_and_removes_punctuation(self):
+        tokens = _normalize_tokens("The user prefers pytest, NOT unittest!")
+        assert "the" not in tokens  # stopword
+        assert "not" not in tokens  # stopword
+        assert "pytest" in tokens
+        assert "unittest" in tokens
+
+    def test_removes_stopwords(self):
+        tokens = _normalize_tokens("the user is a fan of pytest")
+        for sw in ("the", "is", "a", "of"):
+            assert sw not in tokens
+
+    def test_filters_short_tokens(self):
+        tokens = _normalize_tokens("I x a go fan")
+        assert "x" not in tokens  # single char, too short
+        assert "a" not in tokens  # stopword
+        assert "go" in tokens  # len 2, not a stopword
+        assert "fan" in tokens
+
+    def test_empty_string(self):
+        assert _normalize_tokens("") == set()
+
+
+class TestJaccardSimilarity(unittest.TestCase):
+    """Test Jaccard similarity computation."""
+
+    def test_identical_sets(self):
+        s = {"pytest", "unittest", "testing"}
+        assert _jaccard_similarity(s, s) == 1.0
+
+    def test_disjoint_sets(self):
+        assert _jaccard_similarity({"a", "b"}, {"c", "d"}) == 0.0
+
+    def test_partial_overlap(self):
+        a = {"user", "prefers", "pytest"}
+        b = {"user", "prefers", "unittest"}
+        sim = _jaccard_similarity(a, b)
+        assert 0.4 < sim < 0.6  # 2/4 = 0.5
+
+    def test_both_empty(self):
+        assert _jaccard_similarity(set(), set()) == 1.0
+
+    def test_one_empty(self):
+        assert _jaccard_similarity({"a"}, set()) == 0.0
+        assert _jaccard_similarity(set(), {"a"}) == 0.0
+
+    def test_threshold_constant(self):
+        assert DEDUP_SIMILARITY_THRESHOLD == 0.8
+
+
+class TestCrossSessionDeduplication(unittest.TestCase):
+    """Test cross-session fact deduplication (issue #49)."""
+
+    def setUp(self):
+        conn = db._get_conn()
+        conn.execute("DELETE FROM facts")
+        conn.execute("DELETE FROM entries")
+        conn.commit()
+        _seed_entry()
+
+    def test_exact_duplicate_higher_confidence_new(self):
+        """Exact duplicate text: new fact (higher confidence) supersedes old."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_dup_old",
+            "fact_text": "User prefers pytest over unittest",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.8,
+            "created_at": now - 100,
+        }])
+        store_facts([{
+            "fact_id": "f_dup_new",
+            "fact_text": "User prefers pytest over unittest",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 1
+        assert active[0]["id"] == "f_dup_new"
+        assert active[0]["confidence"] == 0.9
+
+    def test_exact_duplicate_lower_confidence_new_skipped(self):
+        """Exact duplicate text: new fact (lower confidence) is skipped entirely."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_keep",
+            "fact_text": "User prefers pytest over unittest",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.95,
+            "created_at": now - 100,
+        }])
+        count = store_facts([{
+            "fact_id": "f_skip",
+            "fact_text": "User prefers pytest over unittest",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.8,
+            "created_at": now,
+        }])
+
+        assert count == 0  # New fact was not stored
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 1
+        assert active[0]["id"] == "f_keep"
+
+    def test_near_duplicate_above_threshold(self):
+        """Slightly different wording but same meaning should deduplicate."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_near_old",
+            "fact_text": "User prefers pytest over unittest for testing",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.8,
+            "created_at": now - 100,
+        }])
+        store_facts([{
+            "fact_id": "f_near_new",
+            "fact_text": "User prefers pytest over unittest for testing projects",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 1
+        assert active[0]["id"] == "f_near_new"
+
+    def test_dissimilar_facts_not_deduplicated(self):
+        """Different facts with same entity+type should both exist (original supersede behavior)."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_diff1",
+            "fact_text": "User chose SQLite for local storage in the RLM project",
+            "source_entry_id": "m_test123",
+            "entity": "sqlite",
+            "fact_type": "decision",
+            "confidence": 0.9,
+            "created_at": now - 100,
+        }])
+        store_facts([{
+            "fact_id": "f_diff2",
+            "fact_text": "Team migrated from PostgreSQL to SQLite for simplicity",
+            "source_entry_id": "m_test123",
+            "entity": "sqlite",
+            "fact_type": "decision",
+            "confidence": 0.85,
+            "created_at": now,
+        }])
+
+        # The original behavior supersedes different facts with same entity+type
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 1
+        assert active[0]["id"] == "f_diff2"
+
+    def test_no_entity_facts_stored_without_dedup(self):
+        """Facts without an entity bypass dedup (no entity to match on)."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_noent1",
+            "fact_text": "User prefers dark mode in all editors",
+            "source_entry_id": "m_test123",
+            "entity": None,
+            "fact_type": "preference",
+            "confidence": 0.8,
+            "created_at": now - 100,
+        }])
+        store_facts([{
+            "fact_id": "f_noent2",
+            "fact_text": "User prefers dark mode in all editors",
+            "source_entry_id": "m_test123",
+            "entity": None,
+            "fact_type": "preference",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 2  # No dedup without entity
+
+    def test_different_entity_no_dedup(self):
+        """Same text but different entities should not deduplicate."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_ent_a",
+            "fact_text": "Uses FTS5 for full-text search",
+            "source_entry_id": "m_test123",
+            "entity": "sqlite",
+            "fact_type": "technical",
+            "confidence": 0.9,
+            "created_at": now - 100,
+        }])
+        store_facts([{
+            "fact_id": "f_ent_b",
+            "fact_text": "Uses FTS5 for full-text search",
+            "source_entry_id": "m_test123",
+            "entity": "elasticsearch",
+            "fact_type": "technical",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 2
+
+    def test_equal_confidence_new_wins(self):
+        """When confidence is equal, the new fact supersedes the old."""
+        now = time.time()
+        store_facts([{
+            "fact_id": "f_eq_old",
+            "fact_text": "User prefers pytest over unittest",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.9,
+            "created_at": now - 100,
+        }])
+        store_facts([{
+            "fact_id": "f_eq_new",
+            "fact_text": "User prefers pytest over unittest",
+            "source_entry_id": "m_test123",
+            "entity": "pytest",
+            "fact_type": "preference",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        active, _ = db.list_facts(include_superseded=False)
+        assert len(active) == 1
+        assert active[0]["id"] == "f_eq_new"
 
 
 class TestConfidenceFloor(unittest.TestCase):
