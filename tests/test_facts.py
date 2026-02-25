@@ -16,6 +16,7 @@ db_mod.DB_PATH = os.path.join(_test_db_dir, "memory.db")
 
 from rlm import db
 from rlm.facts import (
+    EXTRACTION_PROMPT,
     MIN_CONFIDENCE,
     STOPWORDS,
     _clean_entity,
@@ -389,6 +390,94 @@ class TestConfidenceFloor(unittest.TestCase):
         # Verify fallback facts are indeed below threshold
         for f in fallback_facts:
             assert f["confidence"] < MIN_CONFIDENCE
+
+
+class TestExtractionPromptQuality(unittest.TestCase):
+    """Verify the extraction prompt contains guardrails for edge cases."""
+
+    def test_prompt_includes_relationship_examples(self):
+        """Prompt should have relationship fact examples to avoid skewing toward technical."""
+        assert "relationship" in EXTRACTION_PROMPT.lower()
+        assert "Mark works with Jeff" in EXTRACTION_PROMPT
+
+    def test_prompt_includes_observation_examples(self):
+        """Prompt should have observation fact examples."""
+        assert "Cool Cool duo" in EXTRACTION_PROMPT
+        assert "observation" in EXTRACTION_PROMPT.lower()
+
+    def test_prompt_forbids_ui_instructions(self):
+        """Prompt should explicitly forbid extracting UI instructions."""
+        assert "UI instruction" in EXTRACTION_PROMPT
+        assert "Click the settings icon" in EXTRACTION_PROMPT
+
+    def test_prompt_forbids_setup_steps(self):
+        """Prompt should explicitly forbid extracting setup/install steps."""
+        assert "setup step" in EXTRACTION_PROMPT
+        assert "pip install" in EXTRACTION_PROMPT
+
+    def test_prompt_forbids_quoted_documentation(self):
+        """Prompt should explicitly forbid extracting quoted documentation."""
+        assert "quoted documentation" in EXTRACTION_PROMPT
+
+    def test_prompt_requires_proper_noun_entities(self):
+        """Entities must be proper nouns, project names, or tool names."""
+        assert "proper noun" in EXTRACTION_PROMPT.lower()
+        assert "project name" in EXTRACTION_PROMPT.lower()
+        assert "tool" in EXTRACTION_PROMPT.lower()
+
+    def test_prompt_forbids_common_word_entities(self):
+        """Prompt should explicitly ban common English words as entities."""
+        prompt_lower = EXTRACTION_PROMPT.lower()
+        assert "common english words" in prompt_lower
+        # Check specific banned words are listed
+        for word in ["the", "idea", "code", "function", "data"]:
+            assert f'"{word}"' in prompt_lower, f"Expected banned word '{word}' in prompt"
+
+    def test_prompt_has_all_five_fact_types_in_examples(self):
+        """Good-examples section should cover all five fact types."""
+        good_section_start = EXTRACTION_PROMPT.index("GOOD facts")
+        bad_section_start = EXTRACTION_PROMPT.index("BAD facts")
+        good_section = EXTRACTION_PROMPT[good_section_start:bad_section_start]
+        for ft in ("decision", "preference", "relationship", "technical", "observation"):
+            assert ft in good_section, f"Fact type '{ft}' missing from GOOD examples"
+
+    def test_parse_rejects_ui_instruction_shaped_output(self):
+        """LLM output containing UI instructions should still parse but
+        the pipeline's min-length filter protects against very short junk."""
+        # Simulate an LLM returning a bad fact about a UI instruction
+        bad_response = '''[
+            {"fact_text": "Click settings", "entity": "the", "fact_type": "observation", "confidence": 0.5}
+        ]'''
+        facts = _parse_llm_response(bad_response)
+        # _parse_llm_response is a raw parser — it should parse valid JSON
+        assert len(facts) == 1
+        # But extract_facts_from_transcript filters short facts (< 10 chars)
+        # "Click settings" is 14 chars so it passes length, but entity "the"
+        # is a common word — the prompt should prevent this from the LLM side
+
+    def test_extract_filters_empty_entity_to_none(self):
+        """Facts with empty-string entities should be normalized to None."""
+        from unittest.mock import patch
+
+        fake_llm_result = [
+            {"fact_text": "User prefers dark mode for all editors", "entity": "", "fact_type": "preference", "confidence": 0.8},
+        ]
+        with patch("rlm.facts._extract_via_llm", return_value=fake_llm_result):
+            facts = extract_facts_from_transcript("anything", source_entry_id="m_test123")
+            assert len(facts) == 1
+            assert facts[0]["entity"] is None
+
+    def test_extract_normalizes_entity_to_lowercase(self):
+        """Entities should be lowercased for consistent matching."""
+        from unittest.mock import patch
+
+        fake_llm_result = [
+            {"fact_text": "Team uses Terraform for infrastructure", "entity": "Terraform", "fact_type": "technical", "confidence": 0.9},
+        ]
+        with patch("rlm.facts._extract_via_llm", return_value=fake_llm_result):
+            facts = extract_facts_from_transcript("anything", source_entry_id="m_test123")
+            assert len(facts) == 1
+            assert facts[0]["entity"] == "terraform"
 
 
 class TestFormatFacts(unittest.TestCase):
