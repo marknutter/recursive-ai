@@ -16,6 +16,7 @@ db_mod.DB_PATH = os.path.join(_test_db_dir, "memory.db")
 
 from rlm import db
 from rlm.facts import (
+    MIN_CONFIDENCE,
     _extract_fallback,
     _parse_llm_response,
     extract_facts_from_transcript,
@@ -300,6 +301,65 @@ class TestStoreFactsWithContradiction(unittest.TestCase):
         # Both should exist when including superseded
         all_facts, _ = db.list_facts(include_superseded=True)
         assert len(all_facts) == 2
+
+
+class TestConfidenceFloor(unittest.TestCase):
+    """Test that facts below MIN_CONFIDENCE are discarded."""
+
+    def test_min_confidence_constant(self):
+        assert MIN_CONFIDENCE == 0.75
+
+    def test_low_confidence_facts_discarded(self):
+        """Fallback extraction produces 0.5-0.6 confidence — all should be filtered."""
+        transcript = "We chose pytest over unittest. The user prefers functional style."
+        facts = extract_facts_from_transcript(transcript, source_entry_id="m_test123")
+        for f in facts:
+            assert f["confidence"] >= MIN_CONFIDENCE, (
+                f"Fact with confidence {f['confidence']} should have been discarded"
+            )
+
+    def test_high_confidence_facts_kept(self):
+        """Facts at or above the threshold should be kept."""
+        from unittest.mock import patch
+
+        high_conf_facts = [
+            {"fact_text": "User prefers pytest over unittest", "entity": "pytest",
+             "fact_type": "preference", "confidence": 0.9},
+            {"fact_text": "Project uses SQLite for storage", "entity": "sqlite",
+             "fact_type": "technical", "confidence": 0.75},
+        ]
+        with patch("rlm.facts._extract_via_llm", return_value=high_conf_facts):
+            facts = extract_facts_from_transcript("dummy", source_entry_id="m_test123")
+        assert len(facts) == 2
+
+    def test_mixed_confidence_filters_correctly(self):
+        """Only facts >= MIN_CONFIDENCE survive filtering."""
+        from unittest.mock import patch
+
+        mixed_facts = [
+            {"fact_text": "High confidence fact here", "entity": "a",
+             "fact_type": "decision", "confidence": 0.95},
+            {"fact_text": "Low confidence fact here", "entity": "b",
+             "fact_type": "observation", "confidence": 0.5},
+            {"fact_text": "Borderline confidence fact", "entity": "c",
+             "fact_type": "technical", "confidence": 0.75},
+            {"fact_text": "Just below threshold fact", "entity": "d",
+             "fact_type": "preference", "confidence": 0.74},
+        ]
+        with patch("rlm.facts._extract_via_llm", return_value=mixed_facts):
+            facts = extract_facts_from_transcript("dummy", source_entry_id="m_test123")
+        assert len(facts) == 2
+        confidences = {f["confidence"] for f in facts}
+        assert confidences == {0.95, 0.75}
+
+    def test_fallback_facts_all_filtered(self):
+        """Regex fallback produces 0.5-0.6 confidence — should all be below threshold."""
+        fallback_facts = _extract_fallback(
+            "We chose pytest over unittest. User prefers dark mode."
+        )
+        # Verify fallback facts are indeed below threshold
+        for f in fallback_facts:
+            assert f["confidence"] < MIN_CONFIDENCE
 
 
 class TestFormatFacts(unittest.TestCase):
