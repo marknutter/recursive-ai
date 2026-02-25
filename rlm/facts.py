@@ -20,6 +20,10 @@ from rlm import db
 # Valid fact types
 FACT_TYPES = {"decision", "preference", "relationship", "technical", "observation"}
 
+# Minimum confidence threshold for fact storage — facts below this are discarded.
+# Regex fallback often produces 0.5–0.6 confidence facts that pollute the DB.
+MIN_CONFIDENCE = 0.75
+
 EXTRACTION_PROMPT = """Analyze this conversation transcript and extract discrete, specific facts.
 
 GOOD facts (specific, actionable, non-obvious):
@@ -99,6 +103,9 @@ def extract_facts_from_transcript(
         if not isinstance(confidence, (int, float)):
             confidence = 0.8
         confidence = max(0.0, min(1.0, float(confidence)))
+
+        if confidence < MIN_CONFIDENCE:
+            continue
 
         entity = raw.get("entity", "").strip().lower() or None
 
