@@ -8,6 +8,7 @@ Each fact is an atomic, independently queryable piece of knowledge.
 
 import json
 import re
+import string
 import subprocess
 import sys
 import time
@@ -33,6 +34,29 @@ STOPWORDS = {
     "his", "her", "who", "what", "when", "where", "how", "which", "all",
     "each", "every", "any", "some", "can", "will", "just", "about", "also",
 }
+
+DEDUP_SIMILARITY_THRESHOLD = 0.8
+
+
+def _normalize_tokens(text: str) -> set[str]:
+    """Normalize text to a set of lowercase tokens for similarity comparison.
+
+    Removes punctuation, lowercases, and strips stopwords.
+    """
+    text = text.lower()
+    text = text.translate(str.maketrans("", "", string.punctuation))
+    tokens = text.split()
+    return {t for t in tokens if t not in STOPWORDS and len(t) >= 2}
+
+
+def _jaccard_similarity(a: set, b: set) -> float:
+    """Compute Jaccard similarity between two sets."""
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
 
 EXTRACTION_PROMPT = """Analyze this conversation transcript and extract discrete, specific facts.
 
@@ -170,20 +194,45 @@ def extract_facts_from_transcript(
 
 
 def store_facts(facts: list[dict]) -> int:
-    """Store extracted facts in the database, with contradiction detection.
+    """Store extracted facts in the database, with deduplication and contradiction detection.
+
+    Before inserting each fact, checks for existing active facts with high text
+    similarity (Jaccard > 0.8 on normalized token sets). If a near-duplicate is
+    found, the lower-confidence version is superseded. This prevents the same
+    fact from accumulating across sessions. See #49.
 
     Returns count of facts stored.
     """
     stored = 0
     for fact in facts:
-        # Check for contradictions with existing facts
+        new_tokens = _normalize_tokens(fact["fact_text"])
+
+        # Check for near-duplicate facts across all active facts with same entity
         if fact.get("entity"):
             existing = db.find_facts_by_entity(
                 fact["entity"], fact_type=fact["fact_type"]
             )
+
+            duplicate_found = False
             for old in existing:
-                # Supersede older facts with same entity + type
-                db.supersede_fact(old["id"], fact["fact_id"])
+                old_tokens = _normalize_tokens(old["fact_text"])
+                sim = _jaccard_similarity(new_tokens, old_tokens)
+
+                if sim > DEDUP_SIMILARITY_THRESHOLD:
+                    # Near-duplicate: keep the higher-confidence version
+                    if fact["confidence"] >= old["confidence"]:
+                        # New fact wins — supersede the old one
+                        db.supersede_fact(old["id"], fact["fact_id"])
+                    else:
+                        # Old fact wins — skip inserting the new one
+                        duplicate_found = True
+                        break
+                else:
+                    # Different fact with same entity+type — supersede (original behavior)
+                    db.supersede_fact(old["id"], fact["fact_id"])
+
+            if duplicate_found:
+                continue
 
         db.insert_fact(
             fact_id=fact["fact_id"],
