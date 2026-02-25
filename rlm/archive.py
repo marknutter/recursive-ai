@@ -142,6 +142,7 @@ def smart_remember(
         log(log_prefix, f"Semantic tags: {', '.join(semantic_tags)}")
 
     result = {"tags": all_tags, "facts_count": 0}
+    facts_input = None  # Track best input for fact extraction
 
     # Step 2: Store entries
     if len(content) > SUMMARY_THRESHOLD:
@@ -175,6 +176,11 @@ def smart_remember(
         log(log_prefix, f"  Full content: {len(content):,} chars")
 
         primary_entry_id = summary_result["id"]
+
+        # Use summary for fact extraction — it's already distilled and
+        # high-signal, avoiding the lossy head/tail truncation of raw
+        # transcripts that drops mid-conversation context.  (#47)
+        facts_input = summary_text
     else:
         # Single entry with smart tags
         entry_result = memory.add_memory(
@@ -190,12 +196,15 @@ def smart_remember(
         primary_entry_id = entry_result["id"]
 
     # Step 3: Extract structured facts
+    # For large content, use the summary (dense, no truncation needed).
+    # For small content, use the raw content directly.
+    facts_text = facts_input or content
     log(log_prefix, "Extracting structured facts...")
     try:
         from rlm.facts import extract_facts_from_transcript, store_facts
 
         raw_facts = extract_facts_from_transcript(
-            content, source_entry_id=primary_entry_id,
+            facts_text, source_entry_id=primary_entry_id,
         )
         if raw_facts:
             stored_count = store_facts(raw_facts)

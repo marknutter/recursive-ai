@@ -224,6 +224,31 @@ class TestSmartRememberFacts(unittest.TestCase):
         entry = db.get_entry(result["summary_id"])
         self.assertIsNotNone(entry)
 
+    @patch("rlm.semantic_tags.extract_semantic_tags", return_value=[])
+    @patch("rlm.summarize.generate_summary", return_value="Summary: chose pytest, uses SQLite FTS5.")
+    @patch("rlm.facts.extract_facts_from_transcript", return_value=[])
+    def test_large_content_uses_summary_for_facts(self, mock_facts, mock_summary, mock_tags):
+        """Large content should pass the summary (not raw transcript) to fact extraction (#47)."""
+        large = "x" * (SUMMARY_THRESHOLD + 100)
+        smart_remember(content=large, source="session")
+
+        # extract_facts_from_transcript should receive the summary text, not the raw content
+        mock_facts.assert_called_once()
+        actual_text = mock_facts.call_args[0][0]
+        self.assertEqual(actual_text, "Summary: chose pytest, uses SQLite FTS5.")
+        self.assertNotEqual(actual_text, large)
+
+    @patch("rlm.semantic_tags.extract_semantic_tags", return_value=[])
+    @patch("rlm.facts.extract_facts_from_transcript", return_value=[])
+    def test_small_content_uses_raw_for_facts(self, mock_facts, mock_tags):
+        """Small content should pass the raw content directly to fact extraction."""
+        content = "Short session about pytest."
+        smart_remember(content=content, source="text")
+
+        mock_facts.assert_called_once()
+        actual_text = mock_facts.call_args[0][0]
+        self.assertEqual(actual_text, content)
+
 
 class TestSmartRememberFallback(unittest.TestCase):
     """Test graceful fallback when LLM is unavailable."""
