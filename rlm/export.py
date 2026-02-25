@@ -1,7 +1,7 @@
-"""Export a Claude Code session transcript to readable text for memory ingestion.
+"""Export a session transcript to readable text for memory ingestion.
 
-Reads the JSONL session file, extracts human and assistant messages,
-strips tool call noise, and outputs a compact conversation format.
+Supports both Claude Code and OpenClaw JSONL session formats.
+Auto-detects format by checking first lines for OpenClaw's "type": "session" header.
 
 Compression passes:
 - Strip skill prompt injections (biggest win: ~84% of user content)
@@ -73,8 +73,13 @@ def extract_text_from_content(content):
                     tool = block.get("name", "unknown")
                     inp = block.get("input", {})
                     tool_calls.append(_summarize_tool_call(tool, inp))
-                elif block.get("type") == "tool_result":
-                    pass  # Skip tool results — they're verbose
+                elif block.get("type") == "toolCall":
+                    # OpenClaw format: "arguments" instead of "input"
+                    tool = block.get("name", "unknown")
+                    inp = block.get("arguments", {})
+                    tool_calls.append(_summarize_tool_call(tool, inp))
+                elif block.get("type") in ("tool_result", "thinking"):
+                    pass  # Skip tool results and thinking blocks
             elif isinstance(block, str):
                 text = block.strip()
                 text = _strip_system_reminders(text)
@@ -190,18 +195,28 @@ def _compress_pasted_output(text, max_lines=6):
     return "\n".join(head + [f"[...{omitted} lines of terminal output...]"] + tail)
 
 
-def export_session(jsonl_path, output_path=None):
-    """Convert a session JSONL to a compressed conversation transcript.
+def _detect_openclaw_format(jsonl_path):
+    """Check if a JSONL file uses OpenClaw session format.
 
-    Args:
-        jsonl_path: Path to the Claude Code .jsonl session file.
-        output_path: If provided, write to this file. Otherwise return text.
-
-    Returns:
-        The exported transcript as a string.
+    OpenClaw files start with a {"type": "session", "version": ...} header.
+    Returns True for OpenClaw format, False for Claude Code format.
     """
-    messages = []
+    with open(jsonl_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            return entry.get("type") == "session" and "version" in entry
+    return False
 
+
+def _parse_entries(jsonl_path, is_openclaw):
+    """Parse JSONL entries into a unified list of (role, timestamp, content) tuples."""
+    entries = []
     with open(jsonl_path, "r") as f:
         for line in f:
             line = line.strip()
@@ -212,41 +227,75 @@ def export_session(jsonl_path, output_path=None):
             except json.JSONDecodeError:
                 continue
 
-            msg_type = entry.get("type")
-            if msg_type not in ("user", "assistant"):
-                continue
-
-            timestamp = entry.get("timestamp", "")
-            message = entry.get("message", {})
-            role = message.get("role", msg_type)
-            content = message.get("content", "")
-
-            result = extract_text_from_content(content)
-
-            # Handle both old format (string) and new format (texts, tool_calls)
-            if isinstance(result, tuple):
-                texts, tool_calls = result
+            if is_openclaw:
+                if entry.get("type") != "message":
+                    continue
+                message = entry.get("message", {})
+                role = message.get("role", "")
+                # Skip toolResult entries — they're verbose like Claude Code tool_result
+                if role == "toolResult":
+                    continue
+                if role not in ("user", "assistant"):
+                    continue
+                timestamp = entry.get("timestamp", "")
+                content = message.get("content", "")
             else:
-                texts = [result] if result else []
-                tool_calls = []
+                msg_type = entry.get("type")
+                if msg_type not in ("user", "assistant"):
+                    continue
+                timestamp = entry.get("timestamp", "")
+                message = entry.get("message", {})
+                role = message.get("role", msg_type)
+                content = message.get("content", "")
 
-            has_text = any(t.strip() for t in texts)
+            entries.append((role, timestamp, content))
+    return entries
 
-            if not has_text and not tool_calls:
-                continue
 
-            # Skip very short assistant streaming artifacts
-            combined_text = "\n".join(t for t in texts if t.strip())
-            if role == "assistant" and len(combined_text) < 3 and not tool_calls:
-                continue
+def export_session(jsonl_path, output_path=None):
+    """Convert a session JSONL to a compressed conversation transcript.
 
-            messages.append({
-                "role": role,
-                "timestamp": timestamp,
-                "texts": texts,
-                "tool_calls": tool_calls,
-                "has_text": has_text,
-            })
+    Supports both Claude Code and OpenClaw JSONL session formats.
+    Auto-detects format by checking first line for OpenClaw's session header.
+
+    Args:
+        jsonl_path: Path to a Claude Code or OpenClaw .jsonl session file.
+        output_path: If provided, write to this file. Otherwise return text.
+
+    Returns:
+        The exported transcript as a string.
+    """
+    is_openclaw = _detect_openclaw_format(jsonl_path)
+    parsed = _parse_entries(jsonl_path, is_openclaw)
+    messages = []
+
+    for role, timestamp, content in parsed:
+        result = extract_text_from_content(content)
+
+        # Handle both old format (string) and new format (texts, tool_calls)
+        if isinstance(result, tuple):
+            texts, tool_calls = result
+        else:
+            texts = [result] if result else []
+            tool_calls = []
+
+        has_text = any(t.strip() for t in texts)
+
+        if not has_text and not tool_calls:
+            continue
+
+        # Skip very short assistant streaming artifacts
+        combined_text = "\n".join(t for t in texts if t.strip())
+        if role == "assistant" and len(combined_text) < 3 and not tool_calls:
+            continue
+
+        messages.append({
+            "role": role,
+            "timestamp": timestamp,
+            "texts": texts,
+            "tool_calls": tool_calls,
+            "has_text": has_text,
+        })
 
     # Deduplicate assistant messages — streaming creates many incremental updates
     # Keep only the longest version for each consecutive run
