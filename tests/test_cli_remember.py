@@ -76,21 +76,24 @@ class TestRememberNoArgs(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 1)
 
-    def test_content_arg_still_works(self):
-        """Providing content should take the normal store path, not the archive path."""
-        with patch("rlm.cli.memory") as mock_memory:
-            mock_memory.add_memory.return_value = {
-                "id": "m_test",
-                "summary": "test",
-                "tags": ["t"],
-                "char_count": 5,
-            }
-            with patch("builtins.print") as mock_print:
-                cmd_remember(_make_args(content="hello world"))
+    @patch("rlm.cli.archive.smart_remember")
+    def test_content_arg_routes_through_smart(self, mock_sr):
+        """Providing content should route through smart_remember, not archive_session."""
+        mock_sr.return_value = {
+            "summary_id": "m_test",
+            "summary": "test",
+            "tags": ["t"],
+            "facts_count": 0,
+        }
+        with patch("builtins.print") as mock_print:
+            cmd_remember(_make_args(content="hello world"))
 
-            mock_memory.add_memory.assert_called_once()
-            output = mock_print.call_args[0][0]
-            assert "Memory stored" in output
+        mock_sr.assert_called_once()
+        _, kwargs = mock_sr.call_args
+        assert kwargs["content"] == "hello world"
+        assert kwargs["source"] == "text"
+        output = mock_print.call_args[0][0]
+        assert "Memory stored" in output
 
 
 if __name__ == "__main__":

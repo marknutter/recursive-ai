@@ -8,6 +8,10 @@ Both entries share a session_id tag for linking.
 
 Content deduplication: uses session JSONL filename as identifier.
 Skips if file unchanged since last archive, replaces if new content exists.
+
+The smart_remember() function generalizes the pipeline (semantic tags,
+summary generation, facts extraction) to work with ANY content type,
+not just .jsonl session files.
 """
 
 import subprocess
@@ -17,6 +21,10 @@ from datetime import datetime
 from pathlib import Path
 
 from rlm import db, memory
+
+# Content above this threshold gets two-tier storage (summary + full content).
+# Below this, a single entry is stored with smart tags.
+SUMMARY_THRESHOLD = 4000
 
 # Resolve to find the RLM project root (this file lives in rlm/)
 RLM_PROJECT = Path(__file__).resolve().parent.parent
@@ -74,8 +82,135 @@ def read_archived_size(session_file: Path) -> int | None:
     return None
 
 
+def smart_remember(
+    content: str,
+    source: str,
+    source_name: str | None = None,
+    user_tags: list[str] | None = None,
+    label: str | None = None,
+    dedup: bool = False,
+    log_prefix: str = "Remember",
+) -> dict:
+    """Run content through the smart remember pipeline.
+
+    Pipeline: semantic tags → summary (if large) → store → facts extraction.
+
+    For content above SUMMARY_THRESHOLD, creates two entries:
+      1. Summary entry (small, dense — primary search target)
+      2. Full content entry (for drill-down)
+
+    For smaller content, creates a single entry with smart tags.
+
+    Args:
+        content: The text to remember.
+        source: Source type (e.g., "text", "file", "session", "url", "stdin").
+        source_name: Identifier for dedup (e.g., filename, URL).
+        user_tags: Caller-provided tags to include.
+        label: Human-readable label for the entry.
+        dedup: If True and source_name given, replace existing entries.
+        log_prefix: Prefix for log messages.
+
+    Returns:
+        Dict with: summary_id, content_id (if two-tier), facts_count, tags.
+    """
+    from rlm.semantic_tags import extract_semantic_tags, combine_tags
+    from rlm.summarize import generate_summary
+
+    memory.init_memory_store()
+
+    user_tags = user_tags or []
+
+    # Dedup: remove existing entries with same source_name
+    if dedup and source_name:
+        existing = db.find_entries_by_source_name(source_name)
+        if existing:
+            log(log_prefix, f"Replacing {len(existing)} existing entries for {source_name}")
+            for entry in existing:
+                db.delete_entry(entry["id"])
+
+    # Step 1: Generate semantic tags
+    log(log_prefix, "Extracting semantic tags...")
+    semantic_tags = extract_semantic_tags(content)
+    base_str = ",".join(user_tags) if user_tags else ""
+    if base_str or semantic_tags:
+        all_tags_str = combine_tags(base_str, semantic_tags) if base_str else ",".join(semantic_tags)
+        all_tags = [t.strip() for t in all_tags_str.split(",") if t.strip()]
+    else:
+        all_tags = []
+
+    if semantic_tags:
+        log(log_prefix, f"Semantic tags: {', '.join(semantic_tags)}")
+
+    result = {"tags": all_tags, "facts_count": 0}
+
+    # Step 2: Store entries
+    if len(content) > SUMMARY_THRESHOLD:
+        # Two-tier: summary + full content
+        log(log_prefix, "Generating summary...")
+        summary_text = generate_summary(content)
+
+        summary_entry_tags = ["summary"] + all_tags
+        summary_label = label or f"Summary: {source_name or source}"
+        summary_result = memory.add_memory(
+            content=summary_text,
+            tags=summary_entry_tags,
+            source=f"{source}-summary",
+            source_name=source_name,
+            summary=summary_label,
+        )
+        result["summary_id"] = summary_result["id"]
+        result["summary"] = summary_result["summary"]
+        log(log_prefix, f"  Summary: {len(summary_text):,} chars")
+
+        content_entry_tags = ["full-content"] + all_tags
+        content_label = f"Full content: {source_name or source}"
+        content_result = memory.add_memory(
+            content=content,
+            tags=content_entry_tags,
+            source=source,
+            source_name=source_name,
+            summary=content_label,
+        )
+        result["content_id"] = content_result["id"]
+        log(log_prefix, f"  Full content: {len(content):,} chars")
+
+        primary_entry_id = summary_result["id"]
+    else:
+        # Single entry with smart tags
+        entry_result = memory.add_memory(
+            content=content,
+            tags=all_tags if all_tags else None,
+            source=source,
+            source_name=source_name,
+            summary=label,
+        )
+        result["summary_id"] = entry_result["id"]
+        result["summary"] = entry_result["summary"]
+        log(log_prefix, f"  Stored: {len(content):,} chars")
+        primary_entry_id = entry_result["id"]
+
+    # Step 3: Extract structured facts
+    log(log_prefix, "Extracting structured facts...")
+    try:
+        from rlm.facts import extract_facts_from_transcript, store_facts
+
+        raw_facts = extract_facts_from_transcript(
+            content, source_entry_id=primary_entry_id,
+        )
+        if raw_facts:
+            stored_count = store_facts(raw_facts)
+            result["facts_count"] = stored_count
+            log(log_prefix, f"  Facts: {stored_count} extracted and stored")
+        else:
+            log(log_prefix, "  Facts: none extracted")
+    except Exception as e:
+        log(log_prefix, f"  Facts extraction failed (non-fatal): {e}")
+
+    return result
+
+
 def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | None = None):
-    """Export, compress, summarize, and store a session as two memory entries.
+    """Export, compress, and store a session via the smart remember pipeline.
 
     Deduplication: uses the session JSONL filename as an identifier.
     - If no prior archive exists for this file → archive normally
@@ -85,14 +220,11 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     Args:
         session_file: Path to the Claude Code .jsonl session file.
         hook_name: Log prefix (e.g., "PreCompact" or "SessionEnd").
+        cwd: Working directory for project name detection.
 
     Returns:
         True if archival succeeded, False otherwise.
     """
-    # Import here to avoid circular imports at module level
-    from rlm.semantic_tags import extract_semantic_tags, combine_tags
-    from rlm.summarize import generate_summary
-
     memory.init_memory_store()
 
     session_filename = session_file.name
@@ -112,7 +244,7 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
         for entry in existing:
             db.delete_entry(entry["id"])
 
-    # --- Archive ---
+    # --- Export transcript ---
     project_name = get_project_name(cwd=cwd)
     session_id = f"s_{uuid.uuid4().hex[:8]}"
     timestamp = datetime.now().strftime("%Y-%m-%d")
@@ -120,7 +252,6 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
     log(hook_name, f"Archiving session...")
     log(hook_name, f"Project: {project_name}, Session ID: {session_id}")
 
-    # Step 1: Export compressed transcript
     result = subprocess.run(
         [
             "uv", "run", "--project", str(RLM_PROJECT),
@@ -136,67 +267,19 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
         log(hook_name, "Empty transcript - skipping")
         return False
 
-    # Step 2: Generate semantic tags
-    log(hook_name, "Extracting semantic tags...")
-    semantic_tags = extract_semantic_tags(transcript)
-    base_tags = [
-        "conversation", "session", project_name, timestamp, session_id,
-    ]
+    # --- Run through smart pipeline ---
+    base_tags = ["conversation", "session", project_name, timestamp, session_id]
+    label = f"Session: {project_name} on {timestamp}"
 
-    if semantic_tags:
-        all_tags = combine_tags(",".join(base_tags), semantic_tags)
-        log(hook_name, f"Semantic tags: {', '.join(semantic_tags)}")
-    else:
-        all_tags = ",".join(base_tags)
-
-    # Step 3: Generate summary
-    log(hook_name, "Generating session summary...")
-    summary_text = generate_summary(transcript)
-
-    # Step 4: Store summary entry (small, dense — primary search target)
-    summary_tags_str = combine_tags(f"summary,session-summary,{all_tags}", [])
-    summary_tags_list = [t.strip() for t in summary_tags_str.split(",") if t.strip()]
-    summary_label = f"Session summary: {project_name} on {timestamp}"
-    summary_result = memory.add_memory(
-        content=summary_text,
-        tags=summary_tags_list,
-        source="session-summary",
-        source_name=session_filename,
-        summary=summary_label,
-    )
-    summary_entry_id = summary_result["id"]
-    log(hook_name, f"  Summary: {len(summary_text):,} chars")
-
-    # Step 5: Store full transcript (larger, for drill-down)
-    transcript_tags_str = combine_tags(f"transcript,full-transcript,{all_tags}", [])
-    transcript_tags_list = [t.strip() for t in transcript_tags_str.split(",") if t.strip()]
-    transcript_label = f"Full transcript: {project_name} on {timestamp}"
-    memory.add_memory(
+    smart_remember(
         content=transcript,
-        tags=transcript_tags_list,
-        source="session-transcript",
+        source="session",
         source_name=session_filename,
-        summary=transcript_label,
+        user_tags=base_tags,
+        label=label,
+        dedup=False,  # Already handled above
+        log_prefix=hook_name,
     )
-    log(hook_name, f"  Transcript: {len(transcript):,} chars")
-
-    # Step 6: Extract structured facts from transcript
-    log(hook_name, "Extracting structured facts...")
-    try:
-        from rlm.facts import extract_facts_from_transcript, store_facts
-
-        # Link facts to the summary entry (the primary search target)
-        raw_facts = extract_facts_from_transcript(
-            transcript, source_entry_id=summary_entry_id,
-        )
-        if raw_facts:
-            stored_count = store_facts(raw_facts)
-            log(hook_name, f"  Facts: {stored_count} extracted and stored")
-        else:
-            log(hook_name, "  Facts: none extracted")
-    except Exception as e:
-        # Fact extraction is non-critical — don't fail archival
-        log(hook_name, f"  Facts extraction failed (non-fatal): {e}")
 
     log(hook_name, f"Archived to ~/.rlm/memory/ (session: {session_id})")
 

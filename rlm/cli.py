@@ -176,39 +176,104 @@ def cmd_finalize(args):
 
 
 def _remember_from_url(url, tags, summary, depth=2):
-    """Fetch content from a URL and store as memory. Shared logic."""
-    try:
-        results = url_fetcher.remember_url(
-            url=url,
-            tags=tags,
-            summary=summary,
-            depth=depth,
-        )
-    except ValueError as e:
-        _print(f"Error: {e}")
-        sys.exit(1)
+    """Fetch content from a URL and store via smart pipeline."""
+    from urllib.parse import urlparse
 
-    if len(results) == 1:
-        r = results[0]
-        lines = [
-            f"Memory stored from URL: {r['id']}",
-            f"Summary: {r['summary']}",
-            f"Tags: {', '.join(r['tags'])}",
-            f"Size: {r['char_count']:,} chars",
-        ]
+    url_type = url_fetcher.detect_url_type(url)
+    user_tags = list(tags) if tags else []
+
+    if url_type == url_fetcher.URLType.GITHUB_REPO:
+        # Repo: smart pipeline on overview, raw storage for individual files
+        try:
+            entries = url_fetcher.fetch_github_repo(url, depth=depth)
+        except ValueError as e:
+            _print(f"Error: {e}")
+            sys.exit(1)
+
+        if not entries:
+            _print("Error: No content found in repository")
+            sys.exit(1)
+
+        stored = []
+        for i, entry in enumerate(entries):
+            all_tags = user_tags + entry["extra_tags"] + ["url-source"]
+            if i == 0:
+                # Overview → smart pipeline
+                result = archive.smart_remember(
+                    content=entry["content"],
+                    source="url",
+                    source_name=entry["source_name"],
+                    user_tags=all_tags,
+                    label=summary or entry.get("summary"),
+                    dedup=True,
+                )
+                stored.append(
+                    f"  {result['summary_id']}  {entry.get('summary', '')}  "
+                    f"[{', '.join(result['tags'][:4])}]  "
+                    f"({len(entry['content']):,} chars, {result['facts_count']} facts)"
+                )
+            else:
+                # File entries → raw storage (no LLM needed for each file)
+                r = memory.add_memory(
+                    content=entry["content"],
+                    tags=all_tags,
+                    source="url",
+                    source_name=entry["source_name"],
+                    summary=entry.get("summary") if not summary else summary,
+                )
+                stored.append(
+                    f"  {r['id']}  {r['summary']}  "
+                    f"[{', '.join(r['tags'][:4])}]  ({r['char_count']:,} chars)"
+                )
+
+        lines = [f"Stored {len(stored)} entries from URL:\n"] + stored
+        _print("\n".join(lines))
     else:
-        lines = [f"Stored {len(results)} entries from URL:\n"]
-        for r in results:
-            lines.append(
-                f"  {r['id']}  {r['summary']}  "
-                f"[{', '.join(r['tags'][:4])}]  ({r['char_count']:,} chars)"
-            )
+        # Single page → smart pipeline
+        try:
+            content, content_type = url_fetcher.fetch_url(url)
+        except ValueError as e:
+            _print(f"Error: {e}")
+            sys.exit(1)
 
-    _print("\n".join(lines))
+        if not content.strip():
+            _print(f"Error: No content retrieved from {url}")
+            sys.exit(1)
+
+        parsed = urlparse(url)
+        domain = parsed.hostname or "unknown"
+        all_tags = user_tags + ["url-source", domain]
+
+        if summary is None:
+            path_hint = parsed.path.strip("/").split("/")[-1] if parsed.path.strip("/") else ""
+            summary = f"{domain}/{path_hint}"[:80] if path_hint else f"Content from {domain}"[:80]
+
+        result = archive.smart_remember(
+            content=content,
+            source="url",
+            source_name=url,
+            user_tags=all_tags,
+            label=summary,
+            dedup=True,
+        )
+
+        lines = [
+            f"Memory stored: {result['summary_id']}",
+            f"Tags: {', '.join(result['tags'])}",
+            f"Facts extracted: {result.get('facts_count', 0)}",
+        ]
+        if result.get("content_id"):
+            lines.append(f"Full content: {result['content_id']}")
+        _print("\n".join(lines))
 
 
 def cmd_remember(args):
-    """Store a new memory entry."""
+    """Store a new memory entry via the smart remember pipeline.
+
+    All input paths (text, file, stdin, URL, no-args session) are routed
+    through archive.smart_remember() for semantic tags, summary generation,
+    and structured facts extraction.
+    """
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
 
     # URL mode: explicit --url flag
@@ -222,12 +287,20 @@ def cmd_remember(args):
         return
 
     if args.file:
-        try:
-            with open(args.file, "r", errors="replace") as f:
-                content = f.read()
-        except OSError as e:
-            _print(f"Error reading file: {e}")
-            sys.exit(1)
+        # .jsonl session files need export-session compression first
+        if args.file.endswith(".jsonl"):
+            try:
+                content = export.export_session(args.file)
+            except Exception as e:
+                _print(f"Error exporting session file: {e}")
+                sys.exit(1)
+        else:
+            try:
+                with open(args.file, "r", errors="replace") as f:
+                    content = f.read()
+            except OSError as e:
+                _print(f"Error reading file: {e}")
+                sys.exit(1)
         source = "file"
         source_name = args.file
     elif args.stdin:
@@ -255,20 +328,24 @@ def cmd_remember(args):
         _print("Error: Empty content")
         sys.exit(1)
 
-    result = memory.add_memory(
+    # Route through smart pipeline
+    result = archive.smart_remember(
         content=content,
-        tags=tags,
         source=source,
         source_name=source_name,
-        summary=args.summary,
+        user_tags=tags,
+        label=args.summary,
+        dedup=source_name is not None,
     )
 
     lines = [
-        f"Memory stored: {result['id']}",
-        f"Summary: {result['summary']}",
+        f"Memory stored: {result['summary_id']}",
+        f"Summary: {result.get('summary', '')}",
         f"Tags: {', '.join(result['tags'])}",
-        f"Size: {result['char_count']:,} chars",
+        f"Facts extracted: {result.get('facts_count', 0)}",
     ]
+    if result.get("content_id"):
+        lines.append(f"Full content: {result['content_id']}")
     _print("\n".join(lines))
 
 
