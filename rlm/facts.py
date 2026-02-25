@@ -23,6 +23,17 @@ FACT_TYPES = {"decision", "preference", "relationship", "technical", "observatio
 # Regex fallback often produces 0.5–0.6 confidence facts that pollute the DB.
 MIN_CONFIDENCE = 0.75
 
+# Common English stopwords to filter from entities
+STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "as", "be", "was", "are",
+    "been", "has", "had", "have", "do", "does", "did", "not", "no", "if",
+    "so", "up", "out", "that", "this", "then", "than", "its", "my", "your",
+    "we", "he", "she", "they", "them", "i", "me", "you", "us", "our",
+    "his", "her", "who", "what", "when", "where", "how", "which", "all",
+    "each", "every", "any", "some", "can", "will", "just", "about", "also",
+}
+
 EXTRACTION_PROMPT = """Analyze this conversation transcript and extract discrete, specific facts.
 
 GOOD facts (specific, actionable, non-obvious):
@@ -57,6 +68,19 @@ Conversation transcript:
 ---
 
 JSON facts array:"""
+
+
+def _clean_entity(raw: str) -> str | None:
+    """Normalize and filter a raw entity string.
+
+    Returns None if the entity is empty, too short, or a stopword.
+    """
+    entity = raw.strip().lower()
+    if len(entity) < 2:
+        return None
+    if entity in STOPWORDS:
+        return None
+    return entity
 
 
 def extract_facts_from_transcript(
@@ -106,7 +130,7 @@ def extract_facts_from_transcript(
         if confidence < MIN_CONFIDENCE:
             continue
 
-        entity = raw.get("entity", "").strip().lower() or None
+        entity = _clean_entity(raw.get("entity", ""))
 
         fact_id = "f_" + uuid.uuid4().hex[:12]
 

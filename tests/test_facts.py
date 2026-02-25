@@ -17,6 +17,8 @@ db_mod.DB_PATH = os.path.join(_test_db_dir, "memory.db")
 from rlm import db
 from rlm.facts import (
     MIN_CONFIDENCE,
+    STOPWORDS,
+    _clean_entity,
     _extract_fallback,
     _parse_llm_response,
     extract_facts_from_transcript,
@@ -244,6 +246,43 @@ class TestFactExtraction(unittest.TestCase):
             "We chose SQLite for storage", source_entry_id="m_test123"
         )
         assert facts == []
+
+
+class TestEntityPostProcessing(unittest.TestCase):
+    """Test entity cleaning and filtering."""
+
+    def test_clean_entity_normalizes_lowercase(self):
+        assert _clean_entity("SQLite") == "sqlite"
+
+    def test_clean_entity_strips_whitespace(self):
+        assert _clean_entity("  pytest  ") == "pytest"
+
+    def test_clean_entity_filters_short(self):
+        assert _clean_entity("") is None
+        assert _clean_entity("x") is None
+
+    def test_clean_entity_filters_stopwords(self):
+        for word in ("the", "a", "an", "and", "or", "is", "it", "to", "your"):
+            assert _clean_entity(word) is None, f"stopword '{word}' was not filtered"
+
+    def test_clean_entity_keeps_valid(self):
+        assert _clean_entity("pytest") == "pytest"
+        assert _clean_entity("SQLite") == "sqlite"
+        assert _clean_entity("rlm") == "rlm"
+
+    def test_stopwords_set_is_nonempty(self):
+        assert len(STOPWORDS) > 10
+
+    def test_extract_facts_filters_stopword_entities(self):
+        """Entities that are stopwords should become None after extraction."""
+        facts = extract_facts_from_transcript(
+            "We chose pytest over unittest for this project.",
+            source_entry_id="m_test123",
+        )
+        for f in facts:
+            if f["entity"] is not None:
+                assert f["entity"] not in STOPWORDS
+                assert len(f["entity"]) >= 2
 
 
 class TestStoreFactsWithContradiction(unittest.TestCase):
