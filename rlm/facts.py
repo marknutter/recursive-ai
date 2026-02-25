@@ -37,20 +37,40 @@ STOPWORDS = {
 EXTRACTION_PROMPT = """Analyze this conversation transcript and extract discrete, specific facts.
 
 GOOD facts (specific, actionable, non-obvious):
-- "User chose pytest over unittest for the RLM project"
-- "User prefers zero external dependencies in Python projects"
-- "Project RLM uses SQLite FTS5 for memory search, not vector embeddings"
-- "User considers over-engineering a bigger risk than under-engineering"
+- "User chose pytest over unittest for the RLM project" (decision)
+- "User prefers zero external dependencies in Python projects" (preference)
+- "Project RLM uses SQLite FTS5 for memory search, not vector embeddings" (technical)
+- "User considers over-engineering a bigger risk than under-engineering" (preference)
+- "Mark works with Jeff who has go-to-market connections at AWS" (relationship)
+- "Mark performs live electronic music as the Cool Cool duo" (observation)
+- "Sarah introduced the team to Terraform for infrastructure management" (relationship)
 
-BAD facts (generic, obvious, useless — do NOT extract these):
-- "User likes clean code"
-- "User is working on a software project"
-- "User uses Python"
-- "The assistant helped with code"
+BAD facts (generic, obvious, useless — NEVER extract these):
+- "User likes clean code" (too vague)
+- "User is working on a software project" (obvious from context)
+- "User uses Python" (too generic)
+- "The assistant helped with code" (describes the conversation itself)
+- "Click the settings icon and select Preferences" (UI instruction)
+- "Run pip install -r requirements.txt to install dependencies" (setup step)
+- "According to the docs, the API returns a JSON response" (quoted documentation)
+- "The function takes two arguments and returns a string" (code description)
+
+NEVER extract: UI instructions, setup steps, installation commands, quoted documentation,
+or descriptions of what code does. Only extract facts about the USER, their projects,
+their relationships, and their decisions.
+
+ENTITY RULES — the entity field must be one of:
+- A proper noun (e.g. "Mark", "Sarah")
+- A project name (e.g. "rlm", "openclaw")
+- A tool or technology name (e.g. "pytest", "sqlite", "terraform")
+- An organization name (e.g. "AWS", "Anthropic")
+Entities must NEVER be common English words like "the", "idea", "code", "project",
+"function", "data", "user", or "system". If no specific entity fits, use the most
+specific proper noun or tool name mentioned.
 
 For each fact, return a JSON array of objects with these fields:
 - fact_text: The atomic fact (one sentence, specific)
-- entity: Primary entity it relates to (tool name, project name, concept)
+- entity: Primary entity (MUST be a proper noun, project name, or tool name — see rules above)
 - fact_type: one of [decision, preference, relationship, technical, observation]
 - confidence: 0.0-1.0 (how confident based on transcript evidence)
 
@@ -59,7 +79,9 @@ Return ONLY the JSON array, no explanation or markdown.
 Example output:
 [
   {{"fact_text": "User chose SQLite FTS5 over vector embeddings for memory search", "entity": "sqlite", "fact_type": "decision", "confidence": 0.95}},
-  {{"fact_text": "Project RLM uses two-tier storage: summary for search + transcript for drill-down", "entity": "rlm", "fact_type": "technical", "confidence": 0.9}}
+  {{"fact_text": "Project RLM uses two-tier storage: summary for search + transcript for drill-down", "entity": "rlm", "fact_type": "technical", "confidence": 0.9}},
+  {{"fact_text": "Mark works with Jeff who has go-to-market connections at AWS", "entity": "mark", "fact_type": "relationship", "confidence": 0.85}},
+  {{"fact_text": "Mark performs live electronic music as the Cool Cool duo", "entity": "mark", "fact_type": "observation", "confidence": 0.9}}
 ]
 
 Conversation transcript:
