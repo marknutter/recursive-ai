@@ -220,39 +220,29 @@ class TestFactExtraction(unittest.TestCase):
         facts = _parse_llm_response("This is not JSON at all")
         assert facts == []
 
-    def test_fallback_extraction_decisions(self):
+    def test_fallback_returns_empty(self):
+        """Fallback is disabled — should always return empty list (see #50)."""
         transcript = "We chose pytest over unittest for this project. Also decided on SQLite."
         facts = _extract_fallback(transcript)
-        # Should find at least the "chose pytest" pattern
-        texts = [f["fact_text"].lower() for f in facts]
-        assert any("chose" in t or "decided" in t for t in texts)
+        assert facts == []
 
-    def test_fallback_extraction_preferences(self):
+    def test_fallback_returns_empty_for_preferences(self):
+        """Fallback is disabled — preference patterns should not match."""
         transcript = "The user prefers functional programming. They always use type hints."
         facts = _extract_fallback(transcript)
-        texts = [f["fact_text"].lower() for f in facts]
-        assert any("prefer" in t for t in texts)
+        assert facts == []
 
-    def test_fallback_deduplication(self):
-        transcript = "chose pytest. chose pytest. chose pytest."
-        facts = _extract_fallback(transcript)
-        # Should deduplicate
-        assert len(facts) <= 2
-
-    def test_extract_facts_from_transcript_filters_short(self):
-        """Facts shorter than 10 chars should be filtered out."""
-        # Using fallback (no LLM available in tests)
+    def test_extract_returns_empty_without_llm(self):
+        """Without LLM, extraction returns empty list (no fallback)."""
         facts = extract_facts_from_transcript("plain text", source_entry_id="m_test123")
-        for f in facts:
-            assert len(f["fact_text"]) >= 10
+        assert facts == []
 
-    def test_extract_normalizes_fact_type(self):
-        """Unknown fact types should be normalized to 'observation'."""
+    def test_extract_returns_empty_for_decisions_without_llm(self):
+        """Decision-like text should not produce facts without LLM."""
         facts = extract_facts_from_transcript(
             "We chose SQLite for storage", source_entry_id="m_test123"
         )
-        for f in facts:
-            assert f["fact_type"] in {"decision", "preference", "relationship", "technical", "observation"}
+        assert facts == []
 
 
 class TestStoreFactsWithContradiction(unittest.TestCase):

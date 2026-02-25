@@ -1,8 +1,7 @@
 """Structured fact extraction from conversation transcripts.
 
 Extracts discrete facts, decisions, preferences, and relationships
-from archived conversations. Uses LLM (Claude CLI) with keyword
-fallback when LLM is unavailable.
+from archived conversations using LLM (Claude CLI).
 
 Each fact is an atomic, independently queryable piece of knowledge.
 """
@@ -81,7 +80,7 @@ def extract_facts_from_transcript(
 
     raw_facts = _extract_via_llm(truncated)
     if raw_facts is None:
-        raw_facts = _extract_fallback(transcript)
+        raw_facts = []
 
     # Normalize and prepare for storage
     now = time.time()
@@ -233,69 +232,14 @@ def _parse_llm_response(response: str) -> list[dict]:
 
 
 def _extract_fallback(transcript: str) -> list[dict]:
-    """Keyword-based fallback fact extraction when LLM is unavailable.
+    """Keyword-based fallback — disabled, returns empty list.
 
-    Looks for decision patterns, preference statements, and technical choices.
+    The regex patterns produced more noise than signal: generic phrases like
+    'selected X' and 'using X instead of Y' matched UI instructions and setup
+    steps rather than real user decisions.  Better to extract nothing than
+    garbage facts.  See https://github.com/marknutter/recursive-ai/issues/50.
     """
-    facts = []
-
-    # Pattern: "chose X over Y" / "picked X" / "decided on X"
-    decision_patterns = [
-        r'(?:chose|picked|decided on|went with|selected|switched to)\s+(\w[\w\s-]{2,30})',
-        r'(?:using|use)\s+(\w[\w\s-]{2,20})\s+(?:instead of|over|rather than)\s+(\w[\w\s-]{2,20})',
-    ]
-    for pattern in decision_patterns:
-        for match in re.finditer(pattern, transcript, re.IGNORECASE):
-            text = match.group(0).strip()
-            entity = match.group(1).strip().lower()
-            facts.append({
-                "fact_text": text,
-                "entity": entity,
-                "fact_type": "decision",
-                "confidence": 0.6,
-            })
-
-    # Pattern: "prefer(s) X" / "always use X"
-    pref_patterns = [
-        r'(?:i |user )?\bprefers?\b\s+(\w[\w\s-]{2,30})',
-        r'(?:always|usually|typically)\s+(?:use|uses)\s+(\w[\w\s-]{2,20})',
-    ]
-    for pattern in pref_patterns:
-        for match in re.finditer(pattern, transcript, re.IGNORECASE):
-            text = match.group(0).strip()
-            entity = match.group(1).strip().lower()
-            facts.append({
-                "fact_text": text,
-                "entity": entity,
-                "fact_type": "preference",
-                "confidence": 0.5,
-            })
-
-    # Pattern: "project X uses/depends on Y"
-    tech_patterns = [
-        r'(?:project\s+)?(\w+)\s+(?:uses|depends on|is built with|runs on)\s+(\w[\w\s-]{2,20})',
-    ]
-    for pattern in tech_patterns:
-        for match in re.finditer(pattern, transcript, re.IGNORECASE):
-            text = match.group(0).strip()
-            entity = match.group(1).strip().lower()
-            facts.append({
-                "fact_text": text,
-                "entity": entity,
-                "fact_type": "technical",
-                "confidence": 0.5,
-            })
-
-    # Deduplicate by fact_text
-    seen = set()
-    unique = []
-    for f in facts:
-        key = f["fact_text"].lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(f)
-
-    return unique[:20]  # Cap at 20 fallback facts
+    return []
 
 
 def format_facts(facts: list[dict], max_chars: int = 4000) -> str:
