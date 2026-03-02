@@ -34,8 +34,37 @@ def log(prefix: str, msg: str):
     print(f"[{prefix}] {msg}", file=sys.stderr)
 
 
-def get_project_name(cwd: str | None = None) -> str:
-    """Get current project directory name from git root, or cwd."""
+def get_project_name(cwd: str | None = None, session_file: Path | None = None) -> str:
+    """Get project name from session file path, git root, or cwd.
+
+    Priority:
+    1. Session file path (e.g. ~/.claude/projects/-Users-foo-Kode-myproject/...)
+       The slug is the original absolute path with / replaced by -. Reconstruct
+       the path and take the last component.
+    2. Git root directory name.
+    3. cwd directory name.
+    """
+    if session_file:
+        projects_dir = Path.home() / ".claude" / "projects"
+        try:
+            rel = session_file.relative_to(projects_dir)
+            slug = rel.parts[0]  # e.g. "-Users-marknutter-Kode-month-by-month"
+            # The slug is the original absolute path with / replaced by -.
+            # Project names can contain hyphens, so naive split won't work.
+            # Strategy: try progressively longer suffixes as the project name,
+            # checking if the reconstructed path exists on disk.
+            parts = slug.lstrip("-").split("-")
+            for i in range(len(parts) - 1, 0, -1):
+                candidate_name = "-".join(parts[i:])
+                parent_path = "/" + "/".join(parts[:i])
+                full_path = Path(parent_path) / candidate_name
+                if full_path.is_dir():
+                    return candidate_name
+            # Fallback: just use the last segment
+            return parts[-1] if parts else slug
+        except (ValueError, IndexError):
+            pass
+
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -254,7 +283,7 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
             db.delete_entry(entry["id"])
 
     # --- Export transcript ---
-    project_name = get_project_name(cwd=cwd)
+    project_name = get_project_name(cwd=cwd, session_file=session_file)
     session_id = f"s_{uuid.uuid4().hex[:8]}"
     timestamp = datetime.now().strftime("%Y-%m-%d")
 
