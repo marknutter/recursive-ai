@@ -149,6 +149,19 @@ def _init_schema(conn: sqlite3.Connection):
         END;
     """)
 
+    # --- Scratchpad table (short-lived working memory for in-progress analyses) ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scratchpad (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '[]',
+            created_at REAL NOT NULL,
+            expires_at REAL NOT NULL,
+            analysis_session TEXT
+        )
+    """)
+
     conn.commit()
 
 
@@ -781,4 +794,83 @@ def _fact_row_to_dict(row: sqlite3.Row) -> dict:
     # Add score from BM25 rank if present
     if "rank" in d:
         d["score"] = round(-d.pop("rank"), 2)
+    return d
+
+
+# --- Scratchpad operations ---
+
+
+def insert_scratchpad(
+    entry_id: str,
+    label: str,
+    content: str,
+    tags: list[str],
+    created_at: float,
+    expires_at: float,
+    analysis_session: str | None = None,
+) -> None:
+    """Insert a new scratchpad entry."""
+    conn = _get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO scratchpad
+           (id, label, content, tags, created_at, expires_at, analysis_session)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (entry_id, label, content, json.dumps(tags), created_at, expires_at, analysis_session),
+    )
+    conn.commit()
+
+
+def get_scratchpad_entry(entry_id: str) -> dict | None:
+    """Load a scratchpad entry by ID. Returns None if not found."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM scratchpad WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return _scratchpad_row_to_dict(row)
+
+
+def list_scratchpad_entries(include_expired: bool = False) -> list[dict]:
+    """List scratchpad entries, excluding expired ones by default."""
+    import time
+    conn = _get_conn()
+    if include_expired:
+        rows = conn.execute(
+            "SELECT * FROM scratchpad ORDER BY created_at DESC"
+        ).fetchall()
+    else:
+        now = time.time()
+        rows = conn.execute(
+            "SELECT * FROM scratchpad WHERE expires_at > ? ORDER BY created_at DESC",
+            (now,),
+        ).fetchall()
+    return [_scratchpad_row_to_dict(row) for row in rows]
+
+
+def delete_scratchpad_entry(entry_id: str) -> bool:
+    """Delete a scratchpad entry. Returns True if found and deleted."""
+    conn = _get_conn()
+    cursor = conn.execute("DELETE FROM scratchpad WHERE id = ?", (entry_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def clear_scratchpad(expired_only: bool = False) -> int:
+    """Clear scratchpad entries. Returns count deleted."""
+    import time
+    conn = _get_conn()
+    if expired_only:
+        now = time.time()
+        cursor = conn.execute("DELETE FROM scratchpad WHERE expires_at <= ?", (now,))
+    else:
+        cursor = conn.execute("DELETE FROM scratchpad")
+    conn.commit()
+    return cursor.rowcount
+
+
+def _scratchpad_row_to_dict(row: sqlite3.Row) -> dict:
+    """Convert a scratchpad row to a dict."""
+    d = dict(row)
+    d["tags"] = json.loads(d["tags"])
     return d

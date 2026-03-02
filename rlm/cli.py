@@ -8,7 +8,7 @@ import json
 import os
 import sys
 
-from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher, archive
+from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher, archive, scratchpad as scratchpad_mod
 
 MAX_OUTPUT = 4000
 
@@ -610,6 +610,84 @@ def cmd_stats(args):
     _print("\n".join(lines))
 
 
+def cmd_scratchpad(args):
+    """Scratchpad subcommands: save, list, get, clear, promote."""
+    action = args.scratchpad_action
+
+    if action == "save":
+        if args.stdin:
+            import sys as _sys
+            content = _sys.stdin.read()
+        elif args.content:
+            content = args.content
+        else:
+            _print("Error: provide content as argument, or use --stdin")
+            import sys; sys.exit(1)
+
+        if not content.strip():
+            _print("Error: empty content")
+            import sys; sys.exit(1)
+
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
+        result = scratchpad_mod.save(
+            content=content,
+            label=args.label or "",
+            tags=tags,
+            ttl_hours=args.ttl,
+            analysis_session=args.session,
+        )
+        lines = [
+            f"Scratchpad entry saved: {result['id']}",
+            f"Label:   {result['label'] or '(none)'}",
+            f"TTL:     {result['ttl_hours']}h (expires in {result['ttl_hours']:.1f}h)",
+            f"Size:    {result['char_count']:,} chars",
+        ]
+        if result["tags"]:
+            lines.append(f"Tags:    {', '.join(result['tags'])}")
+        if result["analysis_session"]:
+            lines.append(f"Session: {result['analysis_session']}")
+        _print("\n".join(lines))
+
+    elif action == "list":
+        entries = scratchpad_mod.list_entries(include_expired=args.all)
+        _print(scratchpad_mod.format_entry_list(entries))
+
+    elif action == "get":
+        entry = scratchpad_mod.get(args.id)
+        if entry is None:
+            _print(f"Error: no scratchpad entry with id '{args.id}'")
+            import sys; sys.exit(1)
+        _print(scratchpad_mod.format_entry(entry))
+
+    elif action == "clear":
+        n = scratchpad_mod.clear(expired_only=args.expired)
+        if args.expired:
+            _print(f"Cleared {n} expired scratchpad entries.")
+        else:
+            _print(f"Cleared {n} scratchpad entries.")
+
+    elif action == "promote":
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
+        result = scratchpad_mod.promote(
+            entry_id=args.id,
+            tags=tags or None,
+            summary=args.summary,
+        )
+        if result is None:
+            _print(f"Error: no scratchpad entry with id '{args.id}'")
+            import sys; sys.exit(1)
+        lines = [
+            f"Promoted to long-term memory: {result['id']}",
+            f"Summary: {result.get('summary', '')}",
+            f"Tags:    {', '.join(result.get('tags', []))}",
+        ]
+        _print("\n".join(lines))
+
+    else:
+        _print(f"Unknown scratchpad action: {action}")
+        import sys; sys.exit(1)
+
+
 def cmd_tui(args):
     """Launch the interactive TUI dashboard."""
     from rlm.tui import RlmTuiApp
@@ -765,6 +843,41 @@ def main():
     # stats
     p_stats = subparsers.add_parser("stats", help="Show memory store statistics")
     p_stats.set_defaults(func=cmd_stats)
+
+    # scratchpad
+    p_scratch = subparsers.add_parser("scratchpad", help="Manage scratchpad (short-lived working memory)")
+    scratch_sub = p_scratch.add_subparsers(dest="scratchpad_action", required=True)
+
+    # scratchpad save
+    p_scratch_save = scratch_sub.add_parser("save", help="Save a scratchpad entry")
+    p_scratch_save.add_argument("content", nargs="?", help="Content to save")
+    p_scratch_save.add_argument("--label", help="Short label/title for this entry")
+    p_scratch_save.add_argument("--tags", help="Comma-separated tags")
+    p_scratch_save.add_argument("--ttl", type=float, default=24.0,
+                                help="Time-to-live in hours (default: 24)")
+    p_scratch_save.add_argument("--session", help="Associate with an RLM analysis session ID")
+    p_scratch_save.add_argument("--stdin", action="store_true", help="Read content from stdin")
+
+    # scratchpad list
+    p_scratch_list = scratch_sub.add_parser("list", help="List scratchpad entries")
+    p_scratch_list.add_argument("--all", action="store_true", help="Include expired entries")
+
+    # scratchpad get
+    p_scratch_get = scratch_sub.add_parser("get", help="Get a scratchpad entry by ID")
+    p_scratch_get.add_argument("id", help="Scratchpad entry ID")
+
+    # scratchpad clear
+    p_scratch_clear = scratch_sub.add_parser("clear", help="Clear scratchpad entries")
+    p_scratch_clear.add_argument("--expired", action="store_true",
+                                 help="Only remove expired entries (leave active ones)")
+
+    # scratchpad promote
+    p_scratch_promote = scratch_sub.add_parser("promote", help="Promote scratchpad entry to long-term memory")
+    p_scratch_promote.add_argument("id", help="Scratchpad entry ID")
+    p_scratch_promote.add_argument("--tags", help="Additional comma-separated tags for the memory entry")
+    p_scratch_promote.add_argument("--summary", help="Override the memory summary")
+
+    p_scratch.set_defaults(func=cmd_scratchpad)
 
     # tui
     p_tui = subparsers.add_parser("tui", help="Launch interactive TUI dashboard")
