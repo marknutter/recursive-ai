@@ -103,6 +103,50 @@ def handle_tool_call(name: str, arguments: dict) -> str:
         entry_id = arguments.get("entry_id", "")
         return run_rlm("forget", entry_id)
 
+    elif name == "rlm_scratchpad_save":
+        content = arguments.get("content", "")
+        label = arguments.get("label", "")
+        tags = arguments.get("tags", "")
+        ttl = arguments.get("ttl_hours", 24)
+        session = arguments.get("analysis_session", "")
+        cmd = ["scratchpad", "save", content]
+        if label:
+            cmd += ["--label", label]
+        if tags:
+            cmd += ["--tags", tags]
+        if ttl != 24:
+            cmd += ["--ttl", str(ttl)]
+        if session:
+            cmd += ["--session", session]
+        return run_rlm(*cmd)
+
+    elif name == "rlm_scratchpad_list":
+        cmd = ["scratchpad", "list"]
+        if arguments.get("include_expired"):
+            cmd += ["--all"]
+        return run_rlm(*cmd)
+
+    elif name == "rlm_scratchpad_get":
+        entry_id = arguments.get("entry_id", "")
+        return run_rlm("scratchpad", "get", entry_id)
+
+    elif name == "rlm_scratchpad_clear":
+        cmd = ["scratchpad", "clear"]
+        if arguments.get("expired_only"):
+            cmd += ["--expired"]
+        return run_rlm(*cmd)
+
+    elif name == "rlm_scratchpad_promote":
+        entry_id = arguments.get("entry_id", "")
+        tags = arguments.get("tags", "")
+        summary = arguments.get("summary", "")
+        cmd = ["scratchpad", "promote", entry_id]
+        if tags:
+            cmd += ["--tags", tags]
+        if summary:
+            cmd += ["--summary", summary]
+        return run_rlm(*cmd)
+
     else:
         return f"Unknown tool: {name}"
 
@@ -254,6 +298,118 @@ TOOLS = [
                 "entry_id": {
                     "type": "string",
                     "description": "The memory entry ID to delete",
+                },
+            },
+            "required": ["entry_id"],
+        },
+    },
+    {
+        "name": "rlm_scratchpad_save",
+        "description": (
+            "Save intermediate analysis state to the scratchpad — short-lived working memory "
+            "for in-progress RLM analyses. Use this to record partial results, hypotheses, "
+            "or findings mid-analysis so they survive context limits. "
+            "Entries auto-expire after a configurable TTL (default 24h). "
+            "Use rlm_scratchpad_promote to graduate important findings to long-term memory."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The intermediate analysis content to save",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Short label/title for this scratchpad entry",
+                },
+                "tags": {
+                    "type": "string",
+                    "description": "Comma-separated tags",
+                },
+                "ttl_hours": {
+                    "type": "number",
+                    "description": "Hours until this entry expires (default: 24)",
+                    "default": 24,
+                },
+                "analysis_session": {
+                    "type": "string",
+                    "description": "Optional RLM analysis session ID to associate with",
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    {
+        "name": "rlm_scratchpad_list",
+        "description": (
+            "List active scratchpad entries (short-lived working memory). "
+            "Shows entry IDs, labels, sizes, tags, and time until expiry."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_expired": {
+                    "type": "boolean",
+                    "description": "Include expired entries (default: false)",
+                    "default": False,
+                },
+            },
+        },
+    },
+    {
+        "name": "rlm_scratchpad_get",
+        "description": "Get the full content of a specific scratchpad entry by ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "string",
+                    "description": "The scratchpad entry ID (e.g. 'scratch-abc123')",
+                },
+            },
+            "required": ["entry_id"],
+        },
+    },
+    {
+        "name": "rlm_scratchpad_clear",
+        "description": (
+            "Clear scratchpad entries. By default removes all entries. "
+            "Use expired_only=true to only clean up entries past their TTL."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "expired_only": {
+                    "type": "boolean",
+                    "description": "Only remove expired entries (default: false, removes all)",
+                    "default": False,
+                },
+            },
+        },
+    },
+    {
+        "name": "rlm_scratchpad_promote",
+        "description": (
+            "Promote a scratchpad entry to long-term memory. "
+            "Use this when intermediate analysis results are worth keeping permanently. "
+            "The entry is moved from the scratchpad into the persistent memory store "
+            "and removed from the scratchpad."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "string",
+                    "description": "The scratchpad entry ID to promote",
+                },
+                "tags": {
+                    "type": "string",
+                    "description": "Additional comma-separated tags for the long-term memory entry",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary for the long-term memory entry (defaults to entry label)",
                 },
             },
             "required": ["entry_id"],
