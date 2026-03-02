@@ -58,6 +58,7 @@ The user invoked `/rlm <args>`. Parse the arguments to determine the mode:
 ```
 
 **Mode detection:**
+- `remember` with NO additional arguments → **Archive mode**: archive the current Claude Code session on demand. Run: `cd __RLM_ROOT__ && uv run rlm remember` — this finds the active session file and stores it. Report the result to the user. Done.
 - `remember "content"` or `remember --file path` or `remember "https://..."` → **Store mode** (jump to [Memory: Store](#memory-store))
 - `"query"` with NO path → **Recall mode** (jump to [Memory: Recall](#memory-recall))
 - `"query" path/to/content` → **Analysis mode** (continue to Step 1 below)
