@@ -342,7 +342,10 @@ def archive_opencode_session(json_path: str, hook_name: str = "OpenCode", cwd: s
     Returns:
         True if archival succeeded, False otherwise.
     """
-    from rlm.opencode_export import export_opencode_session, get_session_id, get_session_directory
+    from rlm.opencode_export import (
+        export_opencode_session, get_session_id, get_session_directory,
+        _parse_opencode_messages,
+    )
 
     memory.init_memory_store()
 
@@ -353,6 +356,12 @@ def archive_opencode_session(json_path: str, hook_name: str = "OpenCode", cwd: s
     opencode_session_id = get_session_id(data)
     if not opencode_session_id:
         log(hook_name, "No session ID found in export — skipping")
+        return False
+
+    # Check for actual messages before doing expensive export
+    parsed = _parse_opencode_messages(data)
+    if not parsed:
+        log(hook_name, "No messages in export — skipping")
         return False
 
     # Use session ID as source_name for dedup
