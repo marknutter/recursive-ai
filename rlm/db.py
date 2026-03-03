@@ -702,25 +702,31 @@ def count_facts() -> int:
 
 
 def find_facts_by_entity(entity: str, fact_type: str | None = None) -> list[dict]:
-    """Find active facts for a given entity (for contradiction detection)."""
+    """Find active facts for a given entity (for contradiction detection).
+
+    JOINs against entries to exclude orphaned facts whose source entries
+    were cascade-deleted (e.g. during session re-archiving).  See #67.
+    """
     conn = _get_conn()
     if fact_type:
         rows = conn.execute(
-            """SELECT id, fact_text, source_entry_id, entity, fact_type,
-                      confidence, created_at, superseded_by
-               FROM facts
-               WHERE LOWER(entity) = LOWER(?) AND fact_type = ?
-                 AND superseded_by IS NULL
-               ORDER BY created_at DESC""",
+            """SELECT f.id, f.fact_text, f.source_entry_id, f.entity, f.fact_type,
+                      f.confidence, f.created_at, f.superseded_by
+               FROM facts f
+               JOIN entries e ON f.source_entry_id = e.id
+               WHERE LOWER(f.entity) = LOWER(?) AND f.fact_type = ?
+                 AND f.superseded_by IS NULL
+               ORDER BY f.created_at DESC""",
             (entity, fact_type),
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT id, fact_text, source_entry_id, entity, fact_type,
-                      confidence, created_at, superseded_by
-               FROM facts
-               WHERE LOWER(entity) = LOWER(?) AND superseded_by IS NULL
-               ORDER BY created_at DESC""",
+            """SELECT f.id, f.fact_text, f.source_entry_id, f.entity, f.fact_type,
+                      f.confidence, f.created_at, f.superseded_by
+               FROM facts f
+               JOIN entries e ON f.source_entry_id = e.id
+               WHERE LOWER(f.entity) = LOWER(?) AND f.superseded_by IS NULL
+               ORDER BY f.created_at DESC""",
             (entity,),
         ).fetchall()
     return [_fact_row_to_dict(row) for row in rows]

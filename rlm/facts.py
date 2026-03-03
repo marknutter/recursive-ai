@@ -8,6 +8,7 @@ Each fact is an atomic, independently queryable piece of knowledge.
 
 import json
 import re
+import sqlite3
 import string
 import subprocess
 import sys
@@ -234,16 +235,21 @@ def store_facts(facts: list[dict]) -> int:
             if duplicate_found:
                 continue
 
-        db.insert_fact(
-            fact_id=fact["fact_id"],
-            fact_text=fact["fact_text"],
-            source_entry_id=fact["source_entry_id"],
-            entity=fact.get("entity"),
-            fact_type=fact["fact_type"],
-            confidence=fact["confidence"],
-            created_at=fact["created_at"],
-        )
-        stored += 1
+        try:
+            db.insert_fact(
+                fact_id=fact["fact_id"],
+                fact_text=fact["fact_text"],
+                source_entry_id=fact["source_entry_id"],
+                entity=fact.get("entity"),
+                fact_type=fact["fact_type"],
+                confidence=fact["confidence"],
+                created_at=fact["created_at"],
+            )
+            stored += 1
+        except sqlite3.IntegrityError:
+            # Source entry was deleted (e.g. cascade during re-archive).
+            # Skip this fact rather than crashing.  See #67.
+            continue
 
     return stored
 

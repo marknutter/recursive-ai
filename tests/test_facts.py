@@ -730,6 +730,180 @@ class TestExtractionPromptQuality(unittest.TestCase):
             assert facts[0]["entity"] == "terraform"
 
 
+class TestReArchiveSession(unittest.TestCase):
+    """Test that re-archiving a session doesn't cause FK constraint errors (#67).
+
+    Simulates the archive_session() flow: delete old entries (CASCADE deletes
+    facts), create new entries, then store new facts.  The bug was that
+    find_facts_by_entity() could return orphaned facts whose source entries
+    had been cascade-deleted, causing IntegrityError on insert.
+    """
+
+    def setUp(self):
+        conn = db._get_conn()
+        conn.execute("DELETE FROM facts")
+        conn.execute("DELETE FROM entries")
+        conn.commit()
+
+    def _seed_entry(self, entry_id, source_name=None):
+        db.insert_entry(
+            entry_id=entry_id,
+            summary=f"entry {entry_id}",
+            tags=["test"],
+            timestamp=time.time(),
+            source="session",
+            source_name=source_name,
+            char_count=100,
+            content="test content",
+        )
+
+    def test_rearchive_with_cross_session_facts(self):
+        """Re-archiving session S1 should not fail when session S2 has facts
+        with overlapping entities."""
+        now = time.time()
+
+        # --- First archive of session S1 ---
+        self._seed_entry("e_s1_summary", source_name="session1.jsonl")
+        store_facts([{
+            "fact_id": "f_s1_a",
+            "fact_text": "User chose SQLite for local storage in the RLM project",
+            "source_entry_id": "e_s1_summary",
+            "entity": "sqlite",
+            "fact_type": "decision",
+            "confidence": 0.9,
+            "created_at": now - 200,
+        }])
+
+        # --- Archive session S2 (different session, overlapping entity) ---
+        self._seed_entry("e_s2_summary", source_name="session2.jsonl")
+        store_facts([{
+            "fact_id": "f_s2_a",
+            "fact_text": "Project uses SQLite FTS5 for full-text search",
+            "source_entry_id": "e_s2_summary",
+            "entity": "sqlite",
+            "fact_type": "technical",
+            "confidence": 0.85,
+            "created_at": now - 100,
+        }])
+
+        # --- Re-archive session S1: delete old entry (CASCADE deletes facts) ---
+        db.delete_entry("e_s1_summary")
+
+        # Verify S1 facts are gone but S2 facts remain
+        assert db.count_facts() >= 1  # S2's fact still exists
+
+        # --- Create new entry for S1 and store new facts ---
+        self._seed_entry("e_s1_new_summary", source_name="session1.jsonl")
+        stored = store_facts([{
+            "fact_id": "f_s1_new",
+            "fact_text": "User chose SQLite for local persistent storage",
+            "source_entry_id": "e_s1_new_summary",
+            "entity": "sqlite",
+            "fact_type": "decision",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        # New fact should be stored without FK error
+        assert stored == 1
+
+    def test_rearchive_no_orphaned_facts_returned(self):
+        """find_facts_by_entity() should not return facts whose source entries
+        were cascade-deleted."""
+        now = time.time()
+
+        # Create entry and fact, then delete the entry
+        self._seed_entry("e_orphan")
+        db.insert_fact(
+            fact_id="f_orphan",
+            fact_text="Orphaned fact about sqlite",
+            source_entry_id="e_orphan",
+            entity="sqlite",
+            fact_type="technical",
+            confidence=0.9,
+            created_at=now,
+        )
+
+        # Delete entry — CASCADE should delete the fact
+        db.delete_entry("e_orphan")
+
+        # find_facts_by_entity should return nothing
+        results = db.find_facts_by_entity("sqlite")
+        assert len(results) == 0
+
+    def test_rearchive_duplicate_entity_across_sessions(self):
+        """Full re-archive cycle: old session deleted, new facts stored,
+        cross-session dedup still works correctly."""
+        now = time.time()
+
+        # Session S1: initial archive
+        self._seed_entry("e_s1", source_name="s1.jsonl")
+        store_facts([{
+            "fact_id": "f_s1",
+            "fact_text": "Team chose pytest for all testing in the project",
+            "source_entry_id": "e_s1",
+            "entity": "pytest",
+            "fact_type": "decision",
+            "confidence": 0.85,
+            "created_at": now - 300,
+        }])
+
+        # Session S2: shares entity "pytest"
+        self._seed_entry("e_s2", source_name="s2.jsonl")
+        store_facts([{
+            "fact_id": "f_s2",
+            "fact_text": "Team uses pytest with coverage plugin for CI checks",
+            "source_entry_id": "e_s2",
+            "entity": "pytest",
+            "fact_type": "technical",
+            "confidence": 0.9,
+            "created_at": now - 200,
+        }])
+
+        # Re-archive S1: delete old entry, create new, store new facts
+        db.delete_entry("e_s1")
+        self._seed_entry("e_s1_v2", source_name="s1.jsonl")
+
+        stored = store_facts([{
+            "fact_id": "f_s1_v2",
+            "fact_text": "Team chose pytest for all unit and integration testing",
+            "source_entry_id": "e_s1_v2",
+            "entity": "pytest",
+            "fact_type": "decision",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        assert stored == 1
+
+        # Verify the new fact is active
+        active, _ = db.list_facts(include_superseded=False)
+        active_ids = {f["id"] for f in active}
+        assert "f_s1_v2" in active_ids
+
+    def test_insert_fact_with_deleted_entry_raises_no_crash(self):
+        """store_facts() should handle IntegrityError gracefully if the source
+        entry is deleted between extraction and storage."""
+        now = time.time()
+
+        # Create and immediately delete the entry
+        self._seed_entry("e_gone")
+        db.delete_entry("e_gone")
+
+        # Attempting to store a fact referencing the deleted entry should not crash
+        stored = store_facts([{
+            "fact_id": "f_gone",
+            "fact_text": "This fact references a deleted entry",
+            "source_entry_id": "e_gone",
+            "entity": "testing",
+            "fact_type": "observation",
+            "confidence": 0.9,
+            "created_at": now,
+        }])
+
+        assert stored == 0  # Fact was not stored (FK violation caught)
+
+
 class TestFormatFacts(unittest.TestCase):
     """Test fact formatting."""
 
