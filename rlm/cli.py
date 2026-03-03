@@ -8,7 +8,7 @@ import json
 import os
 import sys
 
-from rlm import scanner, chunker, extractor, state, memory, export, url_fetcher, archive
+from rlm import scanner, chunker, extractor, state, memory, export, opencode_export, url_fetcher, archive
 
 MAX_OUTPUT = 4000
 
@@ -629,6 +629,30 @@ def cmd_export_session(args):
         print(text)
 
 
+def cmd_export_opencode(args):
+    """Export an OpenCode session JSON to readable transcript."""
+    output_path = args.output if args.output else None
+    text = opencode_export.export_opencode_session(args.json_file, output_path=output_path)
+
+    if output_path:
+        _print(f"Exported to {output_path} ({len(text):,} chars)")
+    else:
+        print(text)
+
+
+def cmd_archive_opencode(args):
+    """Archive an OpenCode session export to RLM memory."""
+    result = archive.archive_opencode_session(
+        json_path=args.json_file,
+        hook_name="ArchiveOpenCode",
+        cwd=args.cwd,
+    )
+    if result:
+        _print(f"OpenCode session archived: {args.json_file}")
+    else:
+        _print(f"OpenCode session skipped (empty or already archived): {args.json_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="rlm",
@@ -775,6 +799,18 @@ def main():
     p_export.add_argument("session_file", help="Path to Claude Code .jsonl session file")
     p_export.add_argument("--output", help="Write to file instead of stdout")
     p_export.set_defaults(func=cmd_export_session)
+
+    # export-opencode
+    p_export_oc = subparsers.add_parser("export-opencode", help="Export OpenCode session JSON to transcript")
+    p_export_oc.add_argument("json_file", help="Path to OpenCode session export JSON file")
+    p_export_oc.add_argument("--output", help="Write to file instead of stdout")
+    p_export_oc.set_defaults(func=cmd_export_opencode)
+
+    # archive-opencode
+    p_archive_oc = subparsers.add_parser("archive-opencode", help="Archive OpenCode session to RLM memory")
+    p_archive_oc.add_argument("json_file", help="Path to OpenCode session export JSON file")
+    p_archive_oc.add_argument("--cwd", help="Working directory for project name detection")
+    p_archive_oc.set_defaults(func=cmd_archive_opencode)
 
     args = parser.parse_args()
     args.func(args)
