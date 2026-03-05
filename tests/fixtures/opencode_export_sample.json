@@ -1,0 +1,173 @@
+{
+  "info": {
+    "id": "abc123-def456-ghi789",
+    "directory": "/Users/dev/projects/my-app",
+    "title": "Fix authentication bug",
+    "time": {
+      "created": 1709500000000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1709500000000
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "content": "Can you help me fix the authentication bug in the login flow?"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500010000
+        }
+      },
+      "parts": [
+        {
+          "type": "reasoning",
+          "content": "Let me think about the authentication flow..."
+        },
+        {
+          "type": "text",
+          "content": "I'll look at the authentication code to find the issue."
+        },
+        {
+          "type": "tool-invocation",
+          "toolName": "Read",
+          "input": {
+            "file_path": "/Users/dev/projects/my-app/src/auth.ts"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500011000
+        }
+      },
+      "parts": [
+        {
+          "type": "tool-result",
+          "content": "export function login(username: string, password: string) {\n  // bug: missing await\n  const result = validateCredentials(username, password);\n  return result;\n}"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500020000
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "content": "Found the bug! The `validateCredentials` call is missing an `await`. Since it returns a Promise, the function returns a pending Promise instead of the actual result."
+        },
+        {
+          "type": "tool-invocation",
+          "toolName": "Edit",
+          "input": {
+            "file_path": "/Users/dev/projects/my-app/src/auth.ts"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1709500030000
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "content": "ok"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500040000
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "content": "The fix has been applied. The login function now properly awaits the validateCredentials call."
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1709500050000
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "content": "Can you also run the tests?"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500060000
+        }
+      },
+      "parts": [
+        {
+          "type": "tool-invocation",
+          "toolName": "Bash",
+          "input": {
+            "command": "npm test"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500061000
+        }
+      },
+      "parts": [
+        {
+          "type": "tool-result",
+          "content": "PASS src/auth.test.ts\n  Authentication\n    \u2713 login succeeds with valid credentials (23ms)\n    \u2713 login fails with invalid credentials (12ms)\n\nTest Suites: 1 passed, 1 total\nTests: 2 passed, 2 total"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1709500070000
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "content": "All tests pass! The authentication fix is working correctly."
+        }
+      ]
+    }
+  ]
+}

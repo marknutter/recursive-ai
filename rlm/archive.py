@@ -14,6 +14,7 @@ summary generation, facts extraction) to work with ANY content type,
 not just .jsonl session files.
 """
 
+import json
 import subprocess
 import sys
 import uuid
@@ -323,5 +324,80 @@ def archive_session(session_file: Path, hook_name: str = "Archive", cwd: str | N
 
     # Update marker with current file size
     mark_as_archived(session_file, file_size=current_file_size)
+
+    return True
+
+
+def archive_opencode_session(json_path: str, hook_name: str = "OpenCode", cwd: str | None = None):
+    """Export, compress, and store an OpenCode session via the smart remember pipeline.
+
+    Deduplication is DB-level via source_name (the OpenCode session ID).
+    No marker files needed — the session ID is stable across re-exports.
+
+    Args:
+        json_path: Path to the OpenCode session export JSON file.
+        hook_name: Log prefix (e.g., "OpenCode", "OpenCode-Compact").
+        cwd: Working directory for project name detection.
+
+    Returns:
+        True if archival succeeded, False otherwise.
+    """
+    from rlm.opencode_export import (
+        export_opencode_session, get_session_id, get_session_directory,
+        _parse_opencode_messages,
+    )
+
+    memory.init_memory_store()
+
+    # Parse JSON to get session metadata
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    opencode_session_id = get_session_id(data)
+    if not opencode_session_id:
+        log(hook_name, "No session ID found in export — skipping")
+        return False
+
+    # Check for actual messages before doing expensive export
+    parsed = _parse_opencode_messages(data)
+    if not parsed:
+        log(hook_name, "No messages in export — skipping")
+        return False
+
+    # Use session ID as source_name for dedup
+    source_name = f"opencode:{opencode_session_id}"
+
+    # Get project name from cwd, JSON directory, or fallback
+    project_dir = cwd or get_session_directory(data)
+    project_name = get_project_name(cwd=project_dir) if project_dir else "unknown"
+
+    session_id = f"s_{uuid.uuid4().hex[:8]}"
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+
+    log(hook_name, f"Archiving OpenCode session {opencode_session_id[:12]}...")
+    log(hook_name, f"Project: {project_name}, Session ID: {session_id}")
+
+    # Export directly via Python (no subprocess needed)
+    transcript = export_opencode_session(json_path)
+
+    if not transcript or not transcript.strip():
+        log(hook_name, "Empty transcript — skipping")
+        return False
+
+    # Run through smart pipeline with dedup enabled
+    base_tags = ["conversation", "session", "opencode", project_name, timestamp, session_id]
+    label = f"Session: {project_name} on {timestamp} (OpenCode)"
+
+    smart_remember(
+        content=transcript,
+        source="session",
+        source_name=source_name,
+        user_tags=base_tags,
+        label=label,
+        dedup=True,  # DB-level dedup via source_name
+        log_prefix=hook_name,
+    )
+
+    log(hook_name, f"Archived to ~/.rlm/memory/ (session: {session_id})")
 
     return True

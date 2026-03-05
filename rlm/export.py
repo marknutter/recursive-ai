@@ -252,24 +252,24 @@ def _parse_entries(jsonl_path, is_openclaw):
     return entries
 
 
-def export_session(jsonl_path, output_path=None):
-    """Convert a session JSONL to a compressed conversation transcript.
+def _compress_and_format(parsed_entries, source_label, output_path=None):
+    """Shared compression pipeline for any parsed session format.
 
-    Supports both Claude Code and OpenClaw JSONL session formats.
-    Auto-detects format by checking first line for OpenClaw's session header.
+    Takes a list of (role, timestamp, content) tuples — the unified format
+    produced by _parse_entries() or opencode_export._parse_opencode_messages() —
+    and runs the full compression/dedup/formatting pipeline.
 
     Args:
-        jsonl_path: Path to a Claude Code or OpenClaw .jsonl session file.
+        parsed_entries: List of (role, timestamp, content) tuples.
+        source_label: Label for the transcript header (e.g., file path).
         output_path: If provided, write to this file. Otherwise return text.
 
     Returns:
-        The exported transcript as a string.
+        The compressed transcript as a string.
     """
-    is_openclaw = _detect_openclaw_format(jsonl_path)
-    parsed = _parse_entries(jsonl_path, is_openclaw)
     messages = []
 
-    for role, timestamp, content in parsed:
+    for role, timestamp, content in parsed_entries:
         result = extract_text_from_content(content)
 
         # Handle both old format (string) and new format (texts, tool_calls)
@@ -377,7 +377,7 @@ def export_session(jsonl_path, output_path=None):
     # Format output — compact headers
     output_lines = []
     output_lines.append(f"# Session Transcript ({len(compressed)} messages)")
-    output_lines.append(f"# Source: {jsonl_path}")
+    output_lines.append(f"# Source: {source_label}")
     output_lines.append("")
 
     for msg in compressed:
@@ -397,3 +397,21 @@ def export_session(jsonl_path, output_path=None):
             f.write(output_text)
 
     return output_text
+
+
+def export_session(jsonl_path, output_path=None):
+    """Convert a session JSONL to a compressed conversation transcript.
+
+    Supports both Claude Code and OpenClaw JSONL session formats.
+    Auto-detects format by checking first line for OpenClaw's session header.
+
+    Args:
+        jsonl_path: Path to a Claude Code or OpenClaw .jsonl session file.
+        output_path: If provided, write to this file. Otherwise return text.
+
+    Returns:
+        The exported transcript as a string.
+    """
+    is_openclaw = _detect_openclaw_format(jsonl_path)
+    parsed = _parse_entries(jsonl_path, is_openclaw)
+    return _compress_and_format(parsed, source_label=jsonl_path, output_path=output_path)
