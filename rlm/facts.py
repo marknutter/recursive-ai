@@ -86,7 +86,7 @@ their relationships, and their decisions.
 
 ENTITY RULES — the entity field must be one of:
 - A proper noun (e.g. "Mark", "Sarah")
-- A project name (e.g. "rlm", "openclaw")
+- A project name (e.g. "rlm", "terraform")
 - A tool or technology name (e.g. "pytest", "sqlite", "terraform")
 - An organization name (e.g. "AWS", "Anthropic")
 Entities must NEVER be common English words like "the", "idea", "code", "project",

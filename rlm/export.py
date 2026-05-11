@@ -1,7 +1,6 @@
 """Export a session transcript to readable text for memory ingestion.
 
-Supports both Claude Code and OpenClaw JSONL session formats.
-Auto-detects format by checking first lines for OpenClaw's "type": "session" header.
+Parses Claude Code JSONL session format.
 
 Compression passes:
 - Strip skill prompt injections (biggest win: ~84% of user content)
@@ -72,11 +71,6 @@ def extract_text_from_content(content):
                 elif block.get("type") == "tool_use":
                     tool = block.get("name", "unknown")
                     inp = block.get("input", {})
-                    tool_calls.append(_summarize_tool_call(tool, inp))
-                elif block.get("type") == "toolCall":
-                    # OpenClaw format: "arguments" instead of "input"
-                    tool = block.get("name", "unknown")
-                    inp = block.get("arguments", {})
                     tool_calls.append(_summarize_tool_call(tool, inp))
                 elif block.get("type") in ("tool_result", "thinking"):
                     pass  # Skip tool results and thinking blocks
@@ -195,26 +189,7 @@ def _compress_pasted_output(text, max_lines=6):
     return "\n".join(head + [f"[...{omitted} lines of terminal output...]"] + tail)
 
 
-def _detect_openclaw_format(jsonl_path):
-    """Check if a JSONL file uses OpenClaw session format.
-
-    OpenClaw files start with a {"type": "session", "version": ...} header.
-    Returns True for OpenClaw format, False for Claude Code format.
-    """
-    with open(jsonl_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            return entry.get("type") == "session" and "version" in entry
-    return False
-
-
-def _parse_entries(jsonl_path, is_openclaw):
+def _parse_entries(jsonl_path):
     """Parse JSONL entries into a unified list of (role, timestamp, content) tuples."""
     entries = []
     with open(jsonl_path, "r") as f:
@@ -227,26 +202,13 @@ def _parse_entries(jsonl_path, is_openclaw):
             except json.JSONDecodeError:
                 continue
 
-            if is_openclaw:
-                if entry.get("type") != "message":
-                    continue
-                message = entry.get("message", {})
-                role = message.get("role", "")
-                # Skip toolResult entries — they're verbose like Claude Code tool_result
-                if role == "toolResult":
-                    continue
-                if role not in ("user", "assistant"):
-                    continue
-                timestamp = entry.get("timestamp", "")
-                content = message.get("content", "")
-            else:
-                msg_type = entry.get("type")
-                if msg_type not in ("user", "assistant"):
-                    continue
-                timestamp = entry.get("timestamp", "")
-                message = entry.get("message", {})
-                role = message.get("role", msg_type)
-                content = message.get("content", "")
+            msg_type = entry.get("type")
+            if msg_type not in ("user", "assistant"):
+                continue
+            timestamp = entry.get("timestamp", "")
+            message = entry.get("message", {})
+            role = message.get("role", msg_type)
+            content = message.get("content", "")
 
             entries.append((role, timestamp, content))
     return entries
@@ -402,16 +364,12 @@ def _compress_and_format(parsed_entries, source_label, output_path=None):
 def export_session(jsonl_path, output_path=None):
     """Convert a session JSONL to a compressed conversation transcript.
 
-    Supports both Claude Code and OpenClaw JSONL session formats.
-    Auto-detects format by checking first line for OpenClaw's session header.
-
     Args:
-        jsonl_path: Path to a Claude Code or OpenClaw .jsonl session file.
+        jsonl_path: Path to a Claude Code .jsonl session file.
         output_path: If provided, write to this file. Otherwise return text.
 
     Returns:
         The exported transcript as a string.
     """
-    is_openclaw = _detect_openclaw_format(jsonl_path)
-    parsed = _parse_entries(jsonl_path, is_openclaw)
+    parsed = _parse_entries(jsonl_path)
     return _compress_and_format(parsed, source_label=jsonl_path, output_path=output_path)
